@@ -31,7 +31,7 @@
 | `DEFAULT_MODEL_NAME` | 默认模型名称（默认: `"qwen3:14b"`）。**若未在 Potplayer 设置中配置模型将启用此设置** |
 | `bIsReasoningModel` | 若模型支持推理请设为 true（默认: `true`） |
 | `bActivateReasoning` | 启用推理（默认: `false`） |
-| `sReasoningActivatePrompt` | 启用推理提示词: `""` |
+| `sReasoningActivatePrompt` | 启用推理提示词: `"/think "` |
 | `sReasoningDeactivatePrompt` | 禁用推理提示词: `"/no_think "` |
 | `temperature` | 自定义温度（默认: `0` 为确定性输出） |
 
@@ -43,11 +43,15 @@
 | 提示 | 说明 |
 |------|------|
 | `systemPrompt` | 模型的系统提示语 |
-| `userPrompt` | 模型的用户提示语 |
+| `userPromptWithContext` | 用户提示词，使用上下文。 |
+| `userPromptWithoutContext` | 用户提示词，不使用上下文。 |
+
+> 请根据需要调整提示词，它们会显著影响翻译质量
 
 **上下文历史**  
 | 参数 | 说明 |
 |------|------|
+| `bShouldUseContextHistory` | 是否使用上下文历史进行翻译（默认: `true`） |
 | `historyCount` | 使用最近的上下文条数（默认: `3`） |
 | `historyMaxSize` | 最大上下文条数（默认: `10`） |
 

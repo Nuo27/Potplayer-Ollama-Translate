@@ -3,19 +3,19 @@
 */
 
 string GetTitle() {
-    return "{$CP949=本地 AI 번역$}{$CP950=本地 AI 翻譯$}{$CP0=ollama live translate$}";
+    return "{$CP949=Ollama번역$}{$CP950=Ollama翻譯$}{$CP0=Ollama live translate$}";
 }
 
 string GetVersion() {
-    return "1.7";
+    return "1.71";
 }
 
 string GetDesc() {
-    return "{$CP949=本地 AI를 사용한 실시간 자막 번역$}{$CP950=使用本地 AI 的實時字幕翻譯$}{$CP0=Real-time subtitle translation using Local AI$}";
+    return "{$CP949=本地 AI를 사용한 실시간 자막 번역$}{$CP950=使用本地 AI 的實時字幕翻譯$}{$CP0=Real-time subtitle translation using Ollama$}";
 }
 
 string GetLoginTitle() {
-    return "{$CP949=本地 AI 모델 구성$}{$CP950=本地 AI 模型配置$}{$CP0=Local AI Model Configuration$}";
+    return "{$CP949=本地 AI 모델 구성$}{$CP950=本地 AI 模型配置$}{$CP0=Ollama Model Configuration$}";
 }
 
 string GetLoginDesc() {
@@ -35,12 +35,25 @@ string DEFAULT_MODEL_NAME = "qwen3:14b";
 bool bIsReasoningModel = true;
 bool bActivateReasoning = false;
 string sReasoningDeactivatePrompt = "/no_think ";
-string sReasoningActivatePrompt = "";
+string sReasoningActivatePrompt = "/think ";
 float temperature = 0;
 // Prompts
-string systemPrompt = "Act as a professional, authentic translation engine dedicated to providing accurate and fluent translations of subtitles. Do not output any explanatory text or extra context.";
-string userPrompt = "You are a professional subtitle translator skilled in translation. I might provide context for reference, but do not return any contextual text. Only reply with the translation. Please abide by the following rules.\n1. Perform a direct translation based on the content provided without adding any additional information\n2. Perform a reinterpretation based on the first direct translation, making the content more understandable and natural while maintaining the original meaning.\n3. Understand the context and cultural clues, and perform a translation that is more in line with the local language culture.\n4. Your output must contain only the translation, without any additional commentary or context.\n";
+string systemPrompt = "Act as a professional, authentic translation engine dedicated to providing accurate and fluent translations of subtitles. ONLY provide the translated subtitle text without any additional information.";
+string userPromptWithContext = 
+    "You are a professional subtitle translator skilled in accurate and culturally appropriate translations. I may provide additional context to help clarify the meaning. Use this context to understand the subtitle's meaning and provide an accurate translation. Follow these rules:\n"
+    "1. First, perform a direct translation based on the original text without adding any information.\n"
+    "2. Then, reinterpret the translation to make it sound more natural and understandable in the target language, while preserving the original meaning.\n"
+    "3. Use the provided context and cultural cues to ensure the translation aligns with local language norms and nuances.\n"
+    "4. Your output must only include the translated text—do not include any explanations, context, or commentary.\n";
+
+string userPromptWithoutContext = 
+    "You are a professional subtitle translator skilled in Filmography. Understand the cultural background in different languages. Please abide by the following rules:\n"
+    "1. Perform a direct translation based strictly on the text provided, without adding any additional information.\n"
+    "2. Perform a reinterpretation based on the direct translation, making the content more natural and understandable while keeping the original meaning.\n"
+    "3. Rely solely on the given text and general linguistic knowledge—do not assume or invent missing context.\n"
+    "4. Your output must contain only the translation, without any commentary, explanation, or context.\n";
 //Context History
+bool bShouldUseContextHistory = true;
 array<string> contextHistory = {};
 int historyCount = 3;
 int historyMaxSize = 10; 
@@ -51,6 +64,8 @@ string UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
 string api_url = "http://127.0.0.1:11434/v1/chat/completions"; 
 string api_url_base = "http://127.0.0.1:11434";
 
+// exit handler
+bool bDoesExit = false;
 // all languages supported
 array<string> LangTable = 
 {
@@ -102,13 +117,15 @@ string ServerLogin(string User, string Pass) {
         }
     }
     if (!matched){
-        HostPrintUTF8("{$CP949=지원되지 않는 모델입니다. 지원되는 모델을 입력하십시오.$}{$CP950=不支援的模   ，   輸入支援的模型。$}{$CP0=Unsupported model. Please enter a supported model.$}\n");
+        HostPrintUTF8("{$CP949=지원되지 않는 모델입니다. 지원되는 모델을 입력하십시오.$}{$CP950=不支援的模型，輸入支援的模型。$}{$CP0=Unsupported model. Please enter a supported model.$}\n");
         return "未从Ollama中找到模型：" + selected_model;
     }
     HostSaveString("api_key_ollama", api_key);
     HostSaveString("selected_model_ollama", selected_model);
 
     HostPrintUTF8("{$CP949=API 키와 모델 이름이 성공적으로 설정되었습니다.$}{$CP950=API 金鑰與模型名稱已成功配置。$}{$CP0=API Key and model name successfully configured.$}\n");
+
+    bDoesExit = false;
     return "200 ok";
 }
 
@@ -119,11 +136,14 @@ void ServerLogout() {
     HostSaveString("api_key_ollama", "");
     HostSaveString("selected_model_ollama", selected_model);
     HostPrintUTF8("{$CP949=성공적으로 로그아웃되었습니다.$}{$CP950=已成功登出。$}{$CP0=Successfully logged out.$}\n");
+    bDoesExit = true;
 }
 
 string Translate(string Text, string &in SrcLang, string &in DstLang) {
-
-    selected_model = HostLoadString("selected_model_ollama", "wangshenzhi/gemma2-9b-chinese-chat:latest");
+    if(bDoesExit){
+        return "";
+    }
+    selected_model = HostLoadString("selected_model_ollama", "qwen3:14b");
 
     if (DstLang.empty() || DstLang == "{$CP949=자동 감지$}{$CP950=自動檢測$}{$CP0=Auto Detect$}") {
         HostPrintUTF8("{$CP949=목표 언어가 지정되지 않았습니다.$}{$CP950=目標語言未指定。$}{$CP0=Target language not specified.$}\n");
@@ -135,24 +155,30 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
     if (SrcLang.empty() || SrcLang == "{$CP949=자동 감지$}{$CP950=自動檢測$}{$CP0=Auto Detect$}") {
         SrcLang = "";
     }
-
-    // prompt for translation
+    // prompt
     string prompt = "" ;
+
+    // Toggle for reasoning model
     if(bIsReasoningModel){
         prompt += bActivateReasoning ? sReasoningActivatePrompt : sReasoningDeactivatePrompt;
     }
-    prompt += userPrompt;
+    // Context History
+    if(bShouldUseContextHistory){
+        prompt += userPromptWithContext + "\n";
+        string context = "The Context text: \n";
+        context += handleContextHistory(Text);
+        prompt += context;
+    }
+    else{
+        prompt += userPromptWithoutContext+"\n";
+    }
+    // Target Language
+    prompt += "Now translate the following text";
     if (!SrcLang.empty()) {
         prompt += " from " + SrcLang;
     }
-    prompt += " to " + DstLang + "\n";
-
-
-    // Context History
-    string context = "Context text: \n";
-    context += handleContextHistory(Text);
-    prompt += context;
-    prompt += "Text to be translated: \n'''\n" + Text + "\n'''";
+    prompt += " to " + DstLang + " :\n";
+    prompt +=  Text;
 
 
     string escapedSystemMsg = JsonEscape(systemPrompt);
@@ -264,7 +290,7 @@ void OnInitialize() {
     HostPrintUTF8("{$CP949=ollama 번역 플러그인이 로드되었습니다.$}{$CP950=ollama 翻譯插件已加載。$}{$CP0=ollama translation plugin loaded.$}\n");
     // 从临时存储中加载模型名称和 API Key（如果已保存），使用新的键名
     api_key = HostLoadString("api_key_ollama", "");
-    selected_model = HostLoadString("selected_model_ollama", "wangshenzhi/gemma2-9b-chinese-chat:latest");
+    selected_model = HostLoadString("selected_model_ollama", "qwen3:14b");
     if (!api_key.empty()) {
         HostPrintUTF8("{$CP949=저장된 API 키와 모델 이름이 로드되었습니다.$}{$CP950=已加載保存的 API 金鑰與模型名稱。$}{$CP0=Saved API Key and model name loaded.$}\n");
     }

@@ -31,7 +31,7 @@ You can customize the plugin by modifying the settings in the `.as` file.
 | `DEFAULT_MODEL_NAME` | Default model name (default: `"qwen3:14b"`). **This will enable if you didnt setup model in Potplayer's Settings** |
 | `bIsReasoningModel` | Set this to true if your model supports reasoning (default: `true`) |
 | `bActivateReasoning` | Activate reasoning (default: `false`) |
-| `sReasoningActivatePrompt` | Prompt to enable reasoning: `""` |
+| `sReasoningActivatePrompt` | Prompt to enable reasoning: `"/think "` |
 | `sReasoningDeactivatePrompt` | Prompt to disable reasoning: `"/no_think "` |
 | `temperature` | Output randomness (default: `0` for deterministic) |
 
@@ -43,12 +43,15 @@ You can customize the plugin by modifying the settings in the `.as` file.
 | Prompt | Description |
 |--------|-------------|
 | `systemPrompt` | System prompt for the model. |
-| `userPrompt` | User prompt for the model. |
+| `userPromptWithContext` | User prompt for the model with context history. |
+| `userPromptWithoutContext` | User prompt for the model without context history. |
+
+> Remember to adjust the prompts according to your needs, as they can significantly affect the quality of the output.
 
 **Context History**  
 | Setting | Description |
 |--------|-------------|
-| `contextHistory` | Stores previous interactions (array of strings) |
+| `bShouldUseContextHistory` | Whether to use context history for translation (default: `true`) |
 | `historyCount` | Number of entries to use (default: `3`) |
 | `historyMaxSize` | Maximum history entries (default: `10`) |
 
