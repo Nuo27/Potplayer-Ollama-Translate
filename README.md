@@ -9,22 +9,21 @@ This is a plugin for Potplayer that allows real-time subtitle translation using 
 ## Usage
 
 1. Download the `.as` and `.ico` files put them to your Potplayer's installation directory under `...\DAUM\PotPlayer\Extension\Subtitle\Translate` folder.
-2. Open the `.as` file and modify the default model path if needed.
+2. Open the `.as` file and modify `DEFAULT_MODEL_NAME` to your target model name. Or you can leave it and set it up in the extension settings later.
 3. Run PotPlayer, right click and `Subtitles -> Subtitle Translation -> Online Subtitle Translation Settings`, enable the plugin.
-4. In the extension settings, set up your model name if you want to use a different one than the default. Leave the API key empty if you don't need it.
+4. In the extension settings, set up your model name if you want to use a different one than the default. Leave the API key empty if you don't need it. (you wont need it since its for ollama local deployment)
 5. All done. Enjoy live translation!
 
 ## Added Features
 
 - Add custom settings for switching reasoning for reasoning models
-- Add custom temperature settings
 - Custom trimming of translated lines for spaces, new lines and `<think>` tags
 - Improve context history handler for better translation quality
-- Modify the prompt and applied two-steps translation progress. (It should improve the translation quality a lot if the model supports reasoning, however, it will cost more time and resources.)
+- Modify the prompt and applied two-steps translation strategy for better translation quality.
 
 ## Customization
 
-You can customize the plugin by modifying the settings in the `.as` file or through PotPlayer's extension settings UI. Here are some key variables you might want to adjust:
+You can customize the plugin by modifying the settings in the `.as` file.
 
 **Model Settings**  
 | Setting | Description |
@@ -35,6 +34,10 @@ You can customize the plugin by modifying the settings in the `.as` file or thro
 | `sReasoningActivatePrompt` | Prompt to enable reasoning: `""` |
 | `sReasoningDeactivatePrompt` | Prompt to disable reasoning: `"/no_think "` |
 | `temperature` | Output randomness (default: `0` for deterministic) |
+
+> Note that enabling reasoning will definitely consume more resources and slow down the translation process, however it may improve the translation quality a lot with two-steps translation strategy.
+>
+> (Under my testing, it does improve the translation quality a lot XD)
 
 **Prompts**  
 | Prompt | Description |
@@ -48,6 +51,8 @@ You can customize the plugin by modifying the settings in the `.as` file or thro
 | `contextHistory` | Stores previous interactions (array of strings) |
 | `historyCount` | Number of entries to use (default: `3`) |
 | `historyMaxSize` | Maximum history entries (default: `10`) |
+
+> Note if you increase the entries significantly, the response time might increase significantly due to the larger context size. and usually you dont need that large context size.
 
 **Ollama API Settings**  
 | Variable | Description | Default Value |
