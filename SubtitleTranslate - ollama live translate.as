@@ -34,9 +34,14 @@ string GetPasswordText() {
 string DEFAULT_MODEL_NAME = "qwen3:14b";
 bool bIsReasoningModel = true;
 bool bActivateReasoning = false;
+float temperature = 1.3;
+
+// Reasoning Model Handler
+bool isQwenReasoning = true; 
+bool isDeepseekReasoning = false;
 string sReasoningDeactivatePrompt = "/no_think ";
 string sReasoningActivatePrompt = "/think ";
-float temperature = 0;
+
 // Prompts
 string systemPrompt = "Act as a professional, authentic translation engine dedicated to providing accurate and fluent translations of subtitles. ONLY provide the translated subtitle text without any additional information.";
 string userPromptWithContext = 
@@ -66,6 +71,7 @@ string api_url_base = "http://127.0.0.1:11434";
 
 // exit handler
 bool bDoesExit = false;
+
 // all languages supported
 array<string> LangTable = 
 {
@@ -111,7 +117,7 @@ string ServerLogin(string User, string Pass) {
     }
     bool matched = false;
     for (int i = 0; i < modelscount; i++){
-        if (selected_model == names[i]){
+        if (selected_model == names[i].MakeLower()){
             matched = true;
             break;
         }
@@ -124,7 +130,10 @@ string ServerLogin(string User, string Pass) {
     HostSaveString("selected_model_ollama", selected_model);
 
     HostPrintUTF8("{$CP949=API 키와 모델 이름이 성공적으로 설정되었습니다.$}{$CP950=API 金鑰與模型名稱已成功配置。$}{$CP0=API Key and model name successfully configured.$}\n");
-
+    // Check if the model supports reasoning
+    isQwenReasoning = checkIfQwenReasoning();
+    isDeepseekReasoning = checkIfDeepseekReasoning();
+    bIsReasoningModel = isQwenReasoning || isDeepseekReasoning;
     bDoesExit = false;
     return "200 ok";
 }
@@ -137,6 +146,21 @@ void ServerLogout() {
     HostSaveString("selected_model_ollama", selected_model);
     HostPrintUTF8("{$CP949=성공적으로 로그아웃되었습니다.$}{$CP950=已成功登出。$}{$CP0=Successfully logged out.$}\n");
     bDoesExit = true;
+}
+
+// deepseek reasoning 
+bool checkIfDeepseekReasoning() {
+    string model1 = selected_model.MakeLower();
+    string model2 = DEFAULT_MODEL_NAME.MakeLower();
+
+    return model1.find("deepseek-r1") != -1 || model2.find("deepseek-r1") != -1;
+}
+// qwen reasoning 
+bool checkIfQwenReasoning(){
+        string model1 = selected_model.MakeLower();
+    string model2 = DEFAULT_MODEL_NAME.MakeLower();
+
+    return model1.find("qwen3") != -1 || model2.find("qwen3") != -1;
 }
 
 string Translate(string Text, string &in SrcLang, string &in DstLang) {
@@ -158,8 +182,8 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
     // prompt
     string prompt = "" ;
 
-    // Toggle for reasoning model
-    if(bIsReasoningModel){
+    // Toggle for reasoning qwen3
+    if(isQwenReasoning){
         prompt += bActivateReasoning ? sReasoningActivatePrompt : sReasoningDeactivatePrompt;
     }
     // Context History
@@ -184,10 +208,33 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
     string escapedSystemMsg = JsonEscape(systemPrompt);
     string escapedUserMsg = JsonEscape(prompt);
 
-    string requestData = "{\"model\":\"" + selected_model + "\","
-                        "\"messages\":[{\"role\":\"system\",\"content\":\"" + escapedSystemMsg + "\"},"
-                        "{\"role\":\"user\",\"content\":\"" + escapedUserMsg + "\"}],"
-                        "\"temperature\":" + temperature + "}";
+    // Options for Deepseek deep_thinking option
+    bool reasoningEnabled = isDeepseekReasoning && bActivateReasoning;
+    string options = "";
+    if (isDeepseekReasoning) {
+        options += ",\"options\":{\"deep_thinking\":" + (reasoningEnabled ? "true" : "false") + "}";
+    }
+
+   string messages =
+    "["
+    "{\"role\":\"system\",\"content\":\"" + escapedSystemMsg + "\"},"
+    "{\"role\":\"user\",\"content\":\"" + escapedUserMsg + "\"}";
+
+    if (reasoningEnabled) {
+        string assistantMsg = "<think>\\n</think>\\n\\n";  // Escape \n
+        messages += ",{\"role\":\"assistant\",\"content\":\"" + assistantMsg + "\"}";
+    }
+
+    messages += "]";
+
+    string requestData =
+        "{\"model\":\"" + selected_model + "\","
+        "\"messages\":" + messages + ","
+        "\"temperature\":" + temperature +
+        options +
+        "}";
+
+
 
     string headers = "Content-Type: application/json";
 
