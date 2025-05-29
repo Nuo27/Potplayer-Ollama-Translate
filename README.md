@@ -2,6 +2,10 @@
 
 This is a plugin for Potplayer that allows real-time subtitle translation using Ollama.
 
+- Support Qwen3 & Deepseek-R1 reasoning models
+- Allow some custom settings
+- Better context handling, and customizable
+
 <div align="center">
   <a href="https://github.com/Nuo27/Potplayer-Ollama-Translate/blob/master/README_zh.md">简体中文</a> | <strong>English</strong>
 </div>

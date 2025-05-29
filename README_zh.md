@@ -2,6 +2,10 @@
 
 **这是一个用 Ollama 实现字幕实时翻译的 Potplayer 插件**
 
+- 支持 Qwen3 & Deepseek-R1 推理模型
+- 自定义模型设置
+- 优化上下文处理，并可配置
+
 <div align="center">
   <strong >简体中文</a> | <a href="https://github.com/Nuo27/Potplayer-Ollama-Translate/blob/master/README.md">English</a>
 </div>
@@ -16,6 +20,7 @@
 
 ## 新增功能
 
+- 对 qwen3 和 deepseek-r1 推理模型的支持
 - 添加用于推理模型的自定义设置
 - 自定义空格、换行符和 `<think>` 标签的翻译行修剪
 - 改进上下文处理，以提高翻译质量
