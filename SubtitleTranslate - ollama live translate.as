@@ -1,313 +1,236 @@
 /*
-    Real-time subtitle translation for PotPlayer using ollama API
-*/
+ * Real-time subtitle translation for PotPlayer using Ollama
+ */
+
+// ========================
+// PLUGIN METADATA
+// ========================
 
 string GetTitle() {
     return "{$CP949=Ollama번역$}{$CP950=Ollama翻譯$}{$CP0=Ollama live translate$}";
 }
 
 string GetVersion() {
-    return "1.71";
+    return "2.0";
 }
 
 string GetDesc() {
-    return "{$CP949=本地 AI를 사용한 실시간 자막 번역$}{$CP950=使用本地 AI 的實時字幕翻譯$}{$CP0=Real-time subtitle translation using Ollama$}";
+    // return "{$CP949=본지 AI를 사용한 실시간 자막 번역$}{$CP950=使用本地 AI 的實時字幕翻譯$}{$CP0=Real-time subtitle translation using Ollama$}";\
+    return "Real-time subtitle translation Plugin using Ollama$}";
 }
 
 string GetLoginTitle() {
-    return "{$CP949=本地 AI 모델 구성$}{$CP950=本地 AI 模型配置$}{$CP0=Ollama Model Configuration$}";
+    return "{$CP949=본지 AI 모델 구성$}{$CP950=本地 AI 模型配置$}{$CP0=Ollama Model Configuration$}";
 }
 
 string GetLoginDesc() {
-    return "{$CP949=모델 이름을 입력하십시오.$}{$CP950=請輸入模型名稱。$}{$CP0=Please enter the model name.$}";
+    return "{$CP949=모델 이름을 입력하십시오.$}{$CP950=請輸入模型名稱。$}{$CP0=Enter the model name or edit it in file.$}";
 }
 
 string GetUserText() {
-    return "{$CP949=모델 이름 (현     : " + selected_model + ")$}{$CP950=模型名稱 (目前: " + selected_model + ")$}{$CP0=Model Name (Current: " + selected_model + ")$}";
+    return "{$CP949=모델 이름 (현재: " + g_selectedModel + ")$}{$CP950=模型名稱 (目前: " + g_selectedModel + ")$}{$CP0=Model Name (Current: " + g_selectedModel + ")$}";
 }
 
 string GetPasswordText() {
-    return "{$CP949=API 키:$}{$CP950=API 金鑰:$}{$CP0=API Key:$}";
+    return "{$CP949=API 키:$}{$CP950=API 密钥:$}{$CP0=API Key:$}";
 }
 
-// Model Settings
-string DEFAULT_MODEL_NAME = "qwen3:14b";
-bool bIsReasoningModel = true;
-bool bActivateReasoning = false;
-float temperature = 1.3;
+// ========================
+// GLOBAL CONFIGURATION
+// ========================
 
-// Reasoning Model Handler
-bool isQwenReasoning = true; 
-bool isDeepseekReasoning = false;
-string sReasoningDeactivatePrompt = "/no_think ";
-string sReasoningActivatePrompt = "/think ";
+// Core Settings
+const string DEFAULT_MODEL_NAME = "qwen3:14b";
+const string DEFAULT_API_URL = "http://127.0.0.1:11434/v1/chat/completions";
+const string DEFAULT_API_BASE = "http://127.0.0.1:11434";
+const string USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
 
-// Prompts
-string systemPrompt = "Act as a professional, authentic translation engine dedicated to providing accurate and fluent translations of subtitles. ONLY provide the translated subtitle text without any additional information.";
-string userPromptWithContext = 
+// State Variables
+string g_selectedModel = DEFAULT_MODEL_NAME;
+string g_apiKey = "";
+bool g_isPluginActive = true;
+
+// Model Configuration
+class ModelConfig {
+    float temperature = 0.2;
+    float topP = 0.9;
+    int topK = 40;
+    float minP = 0.05;
+    float repeatPenalty = 1.1;
+    int maxTokens = 2048;
+
+    // the defaultParams dictionary should contain the default param values that model supports
+    // and will be loaded when login 
+    dictionary defaultParams;
+    
+    void LoadDefaults(const dictionary &in params) {
+        defaultParams = params;
+    }
+    
+    dictionary GetActiveParams() {
+        dictionary result;
+        
+        if (defaultParams.exists("temperature"))
+            result["temperature"] = temperature;
+        if (defaultParams.exists("top_p"))
+            result["top_p"] = topP;
+        if (defaultParams.exists("top_k"))
+            result["top_k"] = topK;
+        if (defaultParams.exists("min_p"))
+            result["min_p"] = minP;
+        if (defaultParams.exists("repeat_penalty"))
+            result["repeat_penalty"] = repeatPenalty;
+        if (defaultParams.exists("max_tokens"))
+            result["max_tokens"] = maxTokens;
+        return result;
+    }
+}
+
+// Reasoning Configuration
+class ReasoningConfig {
+    bool isReasoningModel = false;
+    // modify activateReasoning will allow trying options and think field for qwen3, deepseek-r1 and other models that support thinking in ollama 0.9.0 or later.
+    bool activateReasoning = false;
+    bool ollamaSupportsNativeThinking = false;
+    bool modelSupportsThinking = false;
+
+    
+    void DetectModelType(const string &in modelName) {
+        string lowerModel = modelName;
+        lowerModel.MakeLower();
+        
+        isReasoningModel = (lowerModel.find("qwen3") != -1) || 
+                          (lowerModel.find("deepseek-r1") != -1);
+    }
+    
+    bool IsDeepseekModel() {
+        string lowerModel = g_selectedModel;
+        lowerModel.MakeLower();
+        return lowerModel.find("deepseek-r1") != -1;
+    }
+}
+
+// Translation Context History Management
+class ContextHistory {
+    array<string> history;
+    int maxSize = 50;
+    int contextCount = 10;
+    bool enabled = true;
+   
+    void AddEntry(const string &in text) {
+        if (!enabled) return;
+       
+        history.insertLast(text);
+        if (history.length() > uint(maxSize)) {
+            history.removeAt(0);
+        }
+    }
+   
+    string GetContext() {
+        if (!enabled || history.length() == 0) return "";
+
+        string context = "Translation Context:\n";
+        
+        // Add recent original sentences
+        int startIdx = max(0, int(history.length()) - contextCount);
+        for (int i = startIdx; i < int(history.length()); ++i) {
+            context += "- \"" + history[i] + "\"\n";
+        }
+        
+        context += "\nPlease refer to the above sentences to ensure consistency in terminology, tone, and style during translation.\n";
+        
+        return context;
+    }
+
+}
+// Global Instances
+ModelConfig g_modelConfig;
+ReasoningConfig g_reasoningConfig;
+ContextHistory g_contextHistory;
+
+
+// ========================
+// TRANSLATION PROMPTS
+// ========================
+
+const string SYSTEM_PROMPT = "You are a professional subtitle translator. Your task is to fluently translate text into the target language. Strictly follow these rules:\n"
+"1. Output only the translated content, without explanations or additional content.\n"
+"2. Use provided context if provided to aid understanding, but DO NOT include it in your output.\n"
+"3. Maintain the original tone, style, and narrative of the subtitles.\n";
+
+const string USER_PROMPT_BASE = 
+"Please follow these instructions strictly:\n"
+"Step 1: Translate faithfully and accurately.\n"
+"Step 2: PARAPHRASE the translated text from step 1 if needed to ensure it sounds natural and understandable in the target language.\n"
+"Step 3: Output the final translation only, without any additional commentary.\n"
+"\n"
+"Now treat the following line as plain text and translate";
+
+const string backup_system_prompt = "Act as a professional, authentic translation engine dedicated to providing accurate and fluent translations of subtitles. ONLY provide the translated subtitle text without any additional information.";
+const string two_step_process_prompt = 
     "You are a professional subtitle translator skilled in accurate and culturally appropriate translations. I may provide additional context to help clarify the meaning. Use this context to understand the subtitle's meaning and provide an accurate translation. Follow these rules:\n"
     "1. First, perform a direct translation based on the original text without adding any information.\n"
     "2. Then, reinterpret the translation to make it sound more natural and understandable in the target language, while preserving the original meaning.\n"
     "3. Use the provided context and cultural cues to ensure the translation aligns with local language norms and nuances.\n"
     "4. Your output must only include the translated text—do not include any explanations, context, or commentary.\n";
+// ========================
+// SUPPORTED LANGUAGES
+// ========================
 
-string userPromptWithoutContext = 
-    "You are a professional subtitle translator skilled in Filmography. Understand the cultural background in different languages. Please abide by the following rules:\n"
-    "1. Perform a direct translation based strictly on the text provided, without adding any additional information.\n"
-    "2. Perform a reinterpretation based on the direct translation, making the content more natural and understandable while keeping the original meaning.\n"
-    "3. Rely solely on the given text and general linguistic knowledge—do not assume or invent missing context.\n"
-    "4. Your output must contain only the translation, without any commentary, explanation, or context.\n";
-//Context History
-bool bShouldUseContextHistory = true;
-array<string> contextHistory = {};
-int historyCount = 3;
-int historyMaxSize = 10; 
-// Ollama API settings
-string api_key = "";
-string selected_model = DEFAULT_MODEL_NAME; 
-string UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
-string api_url = "http://127.0.0.1:11434/v1/chat/completions"; 
-string api_url_base = "http://127.0.0.1:11434";
-
-// exit handler
-bool bDoesExit = false;
-
-// all languages supported
-array<string> LangTable = 
-{
+array<string> g_supportedLanguages = {
     "Auto", "af", "sq", "am", "ar", "hy", "az", "eu", "be", "bn", "bs", "bg", "ca",
-    "ceb", "ny", "zh-CN",
-    "zh-TW", "co", "hr", "cs", "da", "nl", "en", "eo", "et", "tl", "fi", "fr",
-    "fy", "gl", "ka", "de", "el", "gu", "ht", "ha", "haw", "he", "hi", "hmn", "hu", "is", "ig", "id", "ga", "it", "ja", "jw", "kn", "kk", "km",
-    "ko", "ku", "ky", "lo", "la", "lv", "lt", "lb", "mk", "ms", "mg", "ml", "mt", "mi", "mr", "mn", "my", "ne", "no", "ps", "fa", "pl", "pt",
-    "pa", "ro", "ru", "sm", "gd", "sr", "st", "sn", "sd", "si", "sk", "sl", "so", "es", "su", "sw", "sv", "tg", "ta", "te", "th", "tr", "uk",
-    "ur", "uz", "vi", "cy", "xh", "yi", "yo", "zu"
+    "ceb", "ny", "zh-CN", "zh-TW", "co", "hr", "cs", "da", "nl", "en", "eo", "et",
+    "tl", "fi", "fr", "fy", "gl", "ka", "de", "el", "gu", "ht", "ha", "haw", "he",
+    "hi", "hmn", "hu", "is", "ig", "id", "ga", "it", "ja", "jw", "kn", "kk", "km",
+    "ko", "ku", "ky", "lo", "la", "lv", "lt", "lb", "mk", "ms", "mg", "ml", "mt",
+    "mi", "mr", "mn", "my", "ne", "no", "ps", "fa", "pl", "pt", "pa", "ro", "ru",
+    "sm", "gd", "sr", "st", "sn", "sd", "si", "sk", "sl", "so", "es", "su", "sw",
+    "sv", "tg", "ta", "te", "th", "tr", "uk", "ur", "uz", "vi", "cy", "xh", "yi",
+    "yo", "zu"
 };
 
-// get source language list
 array<string> GetSrcLangs() {
-    array<string> ret = LangTable;
-    return ret;
+    return g_supportedLanguages;
 }
 
-// get destination language list
 array<string> GetDstLangs() {
-    array<string> ret = LangTable;
-    return ret;
+    return g_supportedLanguages;
 }
 
-// Login to the server with model name and API key
-string ServerLogin(string User, string Pass) {
 
-    selected_model = User.Trim();
-    api_key = Pass.Trim();
+// ========================
+// UTILITY FUNCTIONS
+// ========================
 
-    selected_model.MakeLower();
-
-    array<string> names = GetOllamaModelNames();
-
-    if (selected_model.empty()) {
-        HostPrintUTF8("{$CP949=모델 이름이 입력되지 않았습니다. 유효한 모델 이름을 입력하십시오.$}{$CP950=模型名稱未輸入，請輸入有效的模型名稱。$}{$CP0=Model name not entered. Please enter a valid model name.$}\n");
-        selected_model = DEFAULT_MODEL_NAME;
-    }
-
-    int modelscount = names.size();
-    if (modelscount == 0){
-        return "Ollama未返回有效的模型名称数据，请确认Ollama是否已运行或已有下载的模型。Ollama did not return valid model name data. Please confirm whether Ollama is running or has any downloaded models.";
-    }
-    bool matched = false;
-    for (int i = 0; i < modelscount; i++){
-        if (selected_model == names[i].MakeLower()){
-            matched = true;
-            break;
-        }
-    }
-    if (!matched){
-        HostPrintUTF8("{$CP949=지원되지 않는 모델입니다. 지원되는 모델을 입력하십시오.$}{$CP950=不支援的模型，輸入支援的模型。$}{$CP0=Unsupported model. Please enter a supported model.$}\n");
-        return "未从Ollama中找到模型：" + selected_model;
-    }
-    HostSaveString("api_key_ollama", api_key);
-    HostSaveString("selected_model_ollama", selected_model);
-
-    HostPrintUTF8("{$CP949=API 키와 모델 이름이 성공적으로 설정되었습니다.$}{$CP950=API 金鑰與模型名稱已成功配置。$}{$CP0=API Key and model name successfully configured.$}\n");
-    // Check if the model supports reasoning
-    isQwenReasoning = checkIfQwenReasoning();
-    isDeepseekReasoning = checkIfDeepseekReasoning();
-    bIsReasoningModel = isQwenReasoning || isDeepseekReasoning;
-    bDoesExit = false;
-    return "200 ok";
-}
-
-// ServerLogout 
-void ServerLogout() {
-    api_key = "";
-    selected_model = DEFAULT_MODEL_NAME; 
-    HostSaveString("api_key_ollama", "");
-    HostSaveString("selected_model_ollama", selected_model);
-    HostPrintUTF8("{$CP949=성공적으로 로그아웃되었습니다.$}{$CP950=已成功登出。$}{$CP0=Successfully logged out.$}\n");
-    bDoesExit = true;
-}
-
-// deepseek reasoning 
-bool checkIfDeepseekReasoning() {
-    string model1 = selected_model.MakeLower();
-    string model2 = DEFAULT_MODEL_NAME.MakeLower();
-
-    return model1.find("deepseek-r1") != -1 || model2.find("deepseek-r1") != -1;
-}
-// qwen reasoning 
-bool checkIfQwenReasoning(){
-        string model1 = selected_model.MakeLower();
-    string model2 = DEFAULT_MODEL_NAME.MakeLower();
-
-    return model1.find("qwen3") != -1 || model2.find("qwen3") != -1;
-}
-
-string Translate(string Text, string &in SrcLang, string &in DstLang) {
-    if(bDoesExit){
-        return "";
-    }
-    selected_model = HostLoadString("selected_model_ollama", "qwen3:14b");
-
-    if (DstLang.empty() || DstLang == "{$CP949=자동 감지$}{$CP950=自動檢測$}{$CP0=Auto Detect$}") {
-        HostPrintUTF8("{$CP949=목표 언어가 지정되지 않았습니다.$}{$CP950=目標語言未指定。$}{$CP0=Target language not specified.$}\n");
-        return "";
-    }
-
-    string UNICODE_RLE = "\u202B";
-
-    if (SrcLang.empty() || SrcLang == "{$CP949=자동 감지$}{$CP950=自動檢測$}{$CP0=Auto Detect$}") {
-        SrcLang = "";
-    }
-    // prompt
-    string prompt = "" ;
-
-    // Toggle for reasoning qwen3
-    if(isQwenReasoning){
-        prompt += bActivateReasoning ? sReasoningActivatePrompt : sReasoningDeactivatePrompt;
-    }
-    // Context History
-    if(bShouldUseContextHistory){
-        prompt += userPromptWithContext + "\n";
-        string context = "The Context text: \n";
-        context += handleContextHistory(Text);
-        prompt += context;
-    }
-    else{
-        prompt += userPromptWithoutContext+"\n";
-    }
-    // Target Language
-    prompt += "Now translate the following text";
-    if (!SrcLang.empty()) {
-        prompt += " from " + SrcLang;
-    }
-    prompt += " to " + DstLang + " :\n";
-    prompt +=  Text;
-
-
-    string escapedSystemMsg = JsonEscape(systemPrompt);
-    string escapedUserMsg = JsonEscape(prompt);
-
-    // Options for Deepseek deep_thinking option
-    bool reasoningEnabled = isDeepseekReasoning && bActivateReasoning;
-    string options = "";
-    if (isDeepseekReasoning) {
-        options += ",\"options\":{\"deep_thinking\":" + (reasoningEnabled ? "true" : "false") + "}";
-    }
-
-   string messages =
-    "["
-    "{\"role\":\"system\",\"content\":\"" + escapedSystemMsg + "\"},"
-    "{\"role\":\"user\",\"content\":\"" + escapedUserMsg + "\"}";
-
-    if (reasoningEnabled) {
-        string assistantMsg = "<think>\\n</think>\\n\\n";  // Escape \n
-        messages += ",{\"role\":\"assistant\",\"content\":\"" + assistantMsg + "\"}";
-    }
-
-    messages += "]";
-
-    string requestData =
-        "{\"model\":\"" + selected_model + "\","
-        "\"messages\":" + messages + ","
-        "\"temperature\":" + temperature +
-        options +
-        "}";
-
-
-
-    string headers = "Content-Type: application/json";
-
-    // Send the translation request
-    string response = HostUrlGetString(api_url, UserAgent, headers, requestData);
-    if (response.empty()) {
-        HostPrintUTF8("{$CP949=번역 요청이 실패했습니다.$}{$CP950=翻譯請求失敗。$}{$CP0=Translation request failed.$}\n");
-        return "";
-    }
-
-    // Parse the JSON response
-    JsonReader Reader;
-    JsonValue Root;
-    if (!Reader.parse(response, Root)) {
-        HostPrintUTF8("{$CP949=API 응답을 분석하지 못했습니다.$}{$CP950=無法解析 API 回應。$}{$CP0=Failed to parse API response.$}\n");
-        return "";
-    }
-
-    JsonValue choices = Root["choices"];
-    if (choices.isArray() && choices[0]["message"]["content"].isString()) {
-        string translatedText = choices[0]["message"]["content"].asString();
-
-        // trim <think> and contents 
-        translatedText = RemoveThinkTags(translatedText);
-
-        if (DstLang == "fa" || DstLang == "ar" || DstLang == "he") {
-            translatedText = UNICODE_RLE + translatedText;
-        }
-        SrcLang = "UTF8";
-        DstLang = "UTF8";
-
-        // Trim final translated text 
-        translatedText = Trim(translatedText);
-        
-        return translatedText;
-    }
-
-    HostPrintUTF8("{$CP949=번역이 실패했습니다.$}{$CP950=翻譯失敗。$}{$CP0=Translation failed.$}\n");
-    return "";
-}
-
-string handleContextHistory(string &in currentText) {
-    contextHistory.insertLast(currentText);
-    if (contextHistory.length() > historyMaxSize) {
-        contextHistory.removeAt(0);
-    }
-    int startIndex = max(0, int(contextHistory.length()) - historyCount - 1);
-    string historyContext = "";
-    for (int i = startIndex; i < int(contextHistory.length()) - 1; ++i) {
-        historyContext += contextHistory[i] + "\n";
-    }
-
-    return historyContext;
-}
 int max(int a, int b) {
     return (a > b) ? a : b;
 }
 
-
-// clean up <think> for reasoning model 
-string RemoveThinkTags(string text) {
-    int startPos = 0;
-    while (true) {
-        int openPos = text.find("<think>", startPos);
-        if (openPos == -1) break;
-        int closePos = text.find("</think>", openPos);
-        if (closePos == -1) break;
-        text = text.substr(0, openPos) + text.substr(closePos + 8);
-        startPos = openPos;
+string TrimString(const string &in text) {
+    if (text.empty()) return "";
+    
+    int start = 0;
+    int end = int(text.length()) - 1;
+    
+    // Trim from start
+    while (start <= end) {
+        string ch = text.substr(start, 1);
+        if (ch != " " && ch != "\n" && ch != "\r" && ch != "\t") break;
+        start++;
     }
-    return text;
+    
+    // Trim from end
+    while (end >= start) {
+        string ch = text.substr(end, 1);
+        if (ch != " " && ch != "\n" && ch != "\r" && ch != "\t") break;
+        end--;
+    }
+    
+    if (start > end) return "";
+    return text.substr(uint(start), uint(end - start + 1));
 }
-string JsonEscape(const string &in input) {
+
+string EscapeJsonString(const string &in input) {
     string output = input;
     output.replace("\\", "\\\\");
     output.replace("\"", "\\\"");
@@ -316,54 +239,536 @@ string JsonEscape(const string &in input) {
     output.replace("\t", "\\t");
     return output;
 }
-// custom trim function to remove leading and trailing whitespace characters
-string Trim(const string &in s) {
-    int len = int(s.length()); 
+
+string RemoveThinkingTags(const string &in text) {
+    string result = text;
+    int startPos = 0;
+    
+    while (true) {
+        int openPos = result.find("<think>", startPos);
+        if (openPos == -1) break;
+        
+        int closePos = result.find("</think>", openPos);
+        if (closePos == -1) break;
+        
+        result = result.substr(0, openPos) + result.substr(closePos + 8);
+        startPos = openPos;
+    }
+    
+    return result;
+}
+
+array<string> SplitString(const string &in text, const string &in delimiter) {
+    array<string> result;
+    if (text.empty()) return result;
+
     int start = 0;
-    int end = len - 1;
-    while (start <= end && 
-      (s.substr(start,1) == " " || s.substr(start,1) == "\n" || s.substr(start,1) == "\r" || s.substr(start,1) == "\t"))
-    start++;
-    while (end >= start && 
-        (s.substr(end,1) == " " || s.substr(end,1) == "\n" || s.substr(end,1) == "\r" || s.substr(end,1) == "\t"))
-        end--;
-    if (start > end) return "";
-    return s.substr(uint(start), uint(end - start + 1));
+    int pos = text.findFirst(delimiter, start);
+
+    while (pos >= 0) {
+        string token = text.substr(start, pos - start);
+        if (!token.empty()) result.insertLast(token);
+        start = pos + int(delimiter.length());
+        pos = text.findFirst(delimiter, start);
+    }
+
+    string token = text.substr(start);
+    if (!token.empty()) result.insertLast(token);
+    return result;
 }
 
 
-// Init
-void OnInitialize() {
-    HostPrintUTF8("{$CP949=ollama 번역 플러그인이 로드되었습니다.$}{$CP950=ollama 翻譯插件已加載。$}{$CP0=ollama translation plugin loaded.$}\n");
-    // 从临时存储中加载模型名称和 API Key（如果已保存），使用新的键名
-    api_key = HostLoadString("api_key_ollama", "");
-    selected_model = HostLoadString("selected_model_ollama", "qwen3:14b");
-    if (!api_key.empty()) {
-        HostPrintUTF8("{$CP949=저장된 API 키와 모델 이름이 로드되었습니다.$}{$CP950=已加載保存的 API 金鑰與模型名稱。$}{$CP0=Saved API Key and model name loaded.$}\n");
+// ========================
+// API COMMUNICATION
+// ========================
+
+class OllamaAPI {
+    string baseUrl = DEFAULT_API_BASE;
+    string chatUrl = DEFAULT_API_URL;
+
+    array<string> GetAvailableModels() {
+        string url = baseUrl + "/api/tags";
+        string response = HostUrlGetString(url, USER_AGENT, "Content-Type: application/json", "");
+        
+        if (response.empty()) {
+            return array<string>();
+        }
+        
+        JsonReader reader;
+        JsonValue root;
+        
+        if (!reader.parse(response, root)) {
+            HostPrintUTF8("Failed to parse models list response\n");
+            return array<string>();
+        }
+        
+        JsonValue models = root["models"];
+        if (!models.isArray()) {
+            return array<string>();
+        }
+        
+        array<string> result;
+        for (int i = 0; i < models.size(); i++) {
+            JsonValue model = models[i];
+            if (model.isObject() && model["name"].isString()) {
+                result.insertLast(model["name"].asString());
+            }
+        }
+        
+        return result;
+    }
+    
+    string GetModelInfo(const string &in modelName) {
+        string url = baseUrl + "/api/show";
+        string requestBody = "{\"model\":\"" + modelName + "\"}";
+        string response = HostUrlGetString(url, USER_AGENT, "Content-Type: application/json", requestBody);
+        
+        if (response.empty()) {
+            return "";
+        }
+        
+        JsonReader reader;
+        JsonValue root;
+        
+        if (!reader.parse(response, root)) {
+            return "";
+        }
+        
+        return FormatModelInfo(root);
+    }
+    
+    string GetVersion() {
+        string url = baseUrl + "/api/version";
+        string response = HostUrlGetString(url, USER_AGENT, "Content-Type: application/json", "");
+        
+        if (response.empty()) {
+            return "";
+        }
+        
+        JsonReader reader;
+        JsonValue root;
+        
+        if (!reader.parse(response, root)) {
+            return "";
+        }
+        
+        return root["version"].asString();
+    }
+    
+    bool SupportsNativeThinking() {
+        string version = GetVersion();
+        if (version.empty()) return false;
+        
+        return CompareVersion(version, "0.9.0") >= 0;
+    }
+    
+    string SendTranslationRequest(const string &in requestData) {
+        return HostUrlGetString(chatUrl, USER_AGENT, "Content-Type: application/json", requestData);
+    }
+    
+    private string FormatModelInfo(JsonValue &in root) {
+        string result = "";
+        
+        // Parameters
+        if (root["parameters"].isString()) {
+            string params = root["parameters"].asString();
+            if (!params.empty()) {
+                result += "Parameters:\n";
+                array<string> lines = SplitString(params, "\n");
+                for (uint i = 0; i < lines.length(); ++i) {
+                    string line = TrimString(lines[i]);
+                    if (!line.empty()) {
+                        result += "  " + line + "\n";
+                    }
+                }
+                // Parse parameters for model config
+                g_modelConfig.LoadDefaults(ParseParameterString(params));
+            }
+        }
+        
+        // Model Info
+        if (root["model_info"].isObject()) {
+            JsonValue modelInfo = root["model_info"];
+            array<string> keys = modelInfo.getKeys();
+            
+            if (keys.length() > 0) {
+                result += "Model Info:\n";
+                for (uint i = 0; i < keys.length(); ++i) {
+                    string key = keys[i];
+                    string value = JsonValueToString(modelInfo[key]);
+                    result += "  " + key + ": " + value + "\n";
+                }
+            }
+        }
+        
+        // Capabilities
+        if (root["capabilities"].isArray()) {
+            JsonValue capabilities = root["capabilities"];
+            array<string> caps;
+            
+            for (int i = 0; i < capabilities.size(); i++) {
+                if (capabilities[i].isString()) {
+                    caps.insertLast(capabilities[i].asString());
+                }
+            }
+            g_reasoningConfig.modelSupportsThinking = caps.find("thinking") != -1;
+        }
+        
+        return result;
+    }
+    
+    string JsonValueToString(JsonValue &in value)
+    {
+        try{
+            if (value.isNull()) return "null";
+            if (value.isString()) return value.asString();
+            if (value.isBool()) return value.asBool() ? "true" : "false";
+            if (value.isInt()) return "" + value.asInt();
+            if (value.isUInt()) return "" + value.asUInt();
+            if (value.isFloat()) return "" + value.asFloat();
+            return "(unknown type)";
+        }
+        catch {
+            return "Error converting JSON to string";
+        }
+
+
+    }
+
+    
+    private int CompareVersion(const string &in version1, const string &in version2) {
+        array<string> v1Parts = SplitString(version1, ".");
+        array<string> v2Parts = SplitString(version2, ".");
+        
+        uint maxLen = max(v1Parts.length(), v2Parts.length());
+        
+        for (uint i = 0; i < maxLen; i++) {
+            int val1 = (i < v1Parts.length()) ? parseInt(v1Parts[i]) : 0;
+            int val2 = (i < v2Parts.length()) ? parseInt(v2Parts[i]) : 0;
+            
+            if (val1 > val2) return 1;
+            if (val1 < val2) return -1;
+        }
+        
+        return 0;
     }
 }
-// Finalize
-void OnFinalize() {
-    HostPrintUTF8("{$CP949=ollama 번역 플러그인이 언로드되었습니다.$}{$CP950=ollama 翻譯插件已卸載。$}{$CP0=ollama translation plugin unloaded.$}\n");
+
+OllamaAPI g_api;
+
+// ========================
+// PARAMETER PARSING
+// ========================
+
+dictionary ParseParameterString(const string &in paramString) {
+    dictionary result;
+    array<string> lines = SplitString(paramString, "\n");
+    
+    for (uint i = 0; i < lines.length(); ++i) {
+        string line = TrimString(lines[i]);
+        if (line.empty()) continue;
+        
+        array<string> parts = SplitString(line, " ");
+        if (parts.length() >= 2) {
+            string key = TrimString(parts[0]);
+            string value = TrimString(parts[1]);
+            if (!key.empty() && !value.empty()) {
+                result[key] = value;
+            }
+        }
+    }
+    
+    return result;
 }
 
-array<string> GetOllamaModelNames(){
-    string url = api_url_base + "/api/tags";
-    string headers = "Content-Type: application/json";
-    string resp = HostUrlGetString(url,UserAgent, headers, "");
+// ========================
+// REQUEST BUILDING
+// ========================
+
+string BuildTranslationRequest(const string &in text, const string &in srcLang, const string &in dstLang) {
+    // Build prompt
+    string prompt = "";
+    
+    // Add reasoning prefix for Qwen models
+    if (g_reasoningConfig.isReasoningModel) {
+        string modelLower = g_selectedModel;
+        modelLower.MakeLower();
+        if (modelLower.find("qwen3") != -1) {
+            prompt += g_reasoningConfig.activateReasoning ? "/think " : "/no_think ";
+        }
+    }
+    
+    // Add context if enabled
+    string context = "\n";
+    if (g_contextHistory.enabled) {
+        context += g_contextHistory.GetContext();
+    }
+    
+    // Add main translation request
+    prompt += USER_PROMPT_BASE;
+    if (!srcLang.empty()) {
+        prompt += " from " + srcLang;
+    }
+    prompt += " to " + dstLang + ":\n";
+    prompt += text;
+    
+    // Build messages array
+    string escapedSystem = EscapeJsonString(SYSTEM_PROMPT+context);
+    string escapedUser = EscapeJsonString(prompt);
+    
+    string messages = "["
+        + "{\"role\":\"system\",\"content\":\"" + escapedSystem + "\"},"
+        + "{\"role\":\"user\",\"content\":\"" + escapedUser + "\"}"
+        + "]";
+    
+    // Build request data
+    string requestData = "{"
+        + "\"model\":\"" + g_selectedModel + "\","
+        + "\"messages\":" + messages;
+    
+    // Add model parameters
+    dictionary params = g_modelConfig.GetActiveParams();
+    if (params.getSize() > 0) {
+        requestData += ",\"options\":{";
+        array<string> keys = params.getKeys();
+        
+        for (uint i = 0; i < keys.length(); i++) {
+            string key = keys[i];
+            requestData += "\"" + key + "\":";
+            
+            // Handle different value types
+            float fVal;
+            int iVal;
+            if (params.get(key, fVal)) {
+                requestData += "" + fVal;
+            } else if (params.get(key, iVal)) {
+                requestData += "" + iVal;
+            }
+            
+            if (i < keys.length() - 1) {
+                requestData += ",";
+            }
+        }
+        requestData += "}";
+    }
+    
+    // Add native thinking support if available
+    if (g_reasoningConfig.ollamaSupportsNativeThinking) {
+        requestData += ",\"think\":" + (g_reasoningConfig.activateReasoning ? "true" : "false");
+    }
+    
+    // Add deep thinking for Deepseek models
+    if (g_reasoningConfig.IsDeepseekModel()) {
+        requestData += ",\"deep_thinking\":" + (g_reasoningConfig.activateReasoning ? "true" : "false");
+    }
+    
+    requestData += "}";
+    
+    return requestData;
+}
+
+// ========================
+// SERVER AUTHENTICATION
+// ========================
+
+string ServerLogin(string User, string Pass) {
+    g_selectedModel = TrimString(User);
+    g_apiKey = TrimString(Pass);
+    
+    if (g_selectedModel.empty()) {
+        g_selectedModel = DEFAULT_MODEL_NAME;
+    }
+    
+    // Test ollama connection and get available models
+    array<string> availableModels = g_api.GetAvailableModels();
+    if (availableModels.length() == 0) {
+        return "Unable to connect to Ollama. Please ensure Ollama is running and has models available.";
+    }
+    
+    // Validate selected model
+    string selectedLower = g_selectedModel;
+    selectedLower.MakeLower();
+    
+    bool modelFound = false;
+    for (uint i = 0; i < availableModels.length(); i++) {
+        string availableLower = availableModels[i];
+        availableLower.MakeLower();
+        if (selectedLower == availableLower) {
+            modelFound = true;
+            g_selectedModel = availableModels[i]; // Use exact case from server
+            break;
+        }
+    }
+    
+    if (!modelFound) {
+        return "Model '" + g_selectedModel + "' not found.";
+    }
+    
+    // Initialize configuration
+    g_reasoningConfig.DetectModelType(g_selectedModel);
+    g_reasoningConfig.ollamaSupportsNativeThinking = g_api.SupportsNativeThinking();
+    
+    // Get model information
+    string modelInfo = g_api.GetModelInfo(g_selectedModel);
+    if (modelInfo.empty()) {
+        HostPrintUTF8("Warning: Could not retrieve model information\n");
+        return "Unable to retrieve model information.";
+    }
+    // HostMessageBox(modelInfo, "Model Information", 0);
+    HostPrintUTF8("Model information retrieved successfully\n" + modelInfo);
+    
+    // Save settings
+    HostSaveString("api_key_ollama", g_apiKey);
+    HostSaveString("selected_model_ollama", g_selectedModel);
+    
+    g_isPluginActive = true;
+    
+    HostPrintUTF8("Successfully configured Ollama translation plugin\n");
+    HostPrintUTF8("Model: " + g_selectedModel + "\n");
+    HostPrintUTF8("Native thinking support: " + (g_reasoningConfig.ollamaSupportsNativeThinking ? "Yes" : "No") + "\n");
+
+
+    // TEST request and response
+    // Consider comment out the following test code when you are done testing and the translation is working as expected.
+    // This is just for testing purposes to ensure that the translation function works correctly.
+
+    // Send a test request and check the response 
+    string test_srcLang = "en";
+    string test_dstLang = "fr";
+    string test_text = "Hello, how are you?";
+
+    string translated_text = Translate(test_text, test_srcLang, test_dstLang);
+
+    string test_request = BuildTranslationRequest(test_text, test_srcLang, test_dstLang);
+    // HostMessageBox(test_request, "Test Request", 0);
+
+    
+    if(!translated_text.empty() && translated_text != "") {
+        HostPrintUTF8("Translation task completed successfully!\n" + "Test Text: " + test_text + "\n" + "Translated Text: " + translated_text + "\n" );
+        // HostMessageBox("TEST Translation task completed successfully!\n" + "Test Text: " + test_text + "\n" + "Translated Text: " + translated_text + "\n", "Success", 0);
+    }
+    else {
+        HostMessageBox("Translation task failed. Please check the settings", "Error", 0);
+        return "Translation task failed. Please check the settings";
+    }
+    
+    return "200 ok";
+}
+
+void ServerLogout() {
+    g_apiKey = "";
+    g_selectedModel = DEFAULT_MODEL_NAME;
+    g_isPluginActive = false;
+    
+    HostSaveString("api_key_ollama", "");
+    HostSaveString("selected_model_ollama", g_selectedModel);
+    HostPrintUTF8("Successfully logged out from Ollama translation plugin\n");
+}
+
+// ========================
+// MAIN TRANSLATION FUNCTION
+// ========================
+
+string Translate(string Text, string &in SrcLang, string &in DstLang) {
+    if (!g_isPluginActive) {
+        return "";
+    }
+    
+    // Validate target language
+    if (DstLang.empty() || DstLang == "Auto" || DstLang.find("자동") != -1 || DstLang.find("自動") != -1) {
+        HostPrintUTF8("Target language not specified\n");
+        return "";
+    }
+    
+    // Handle source language
+    string srcLangCode = SrcLang;
+    if (srcLangCode.empty() || srcLangCode == "Auto" || srcLangCode.find("자동") != -1 || srcLangCode.find("自動") != -1) {
+        srcLangCode = "";
+    }
+        
+    // Build and send request
+    string requestData = BuildTranslationRequest(Text, srcLangCode, DstLang);
+    
+    // Add to context history
+    g_contextHistory.AddEntry(Text);
+
+    string response = g_api.SendTranslationRequest(requestData);
+
+    
+    if (response.empty()) {
+        HostPrintUTF8("Translation request failed - no response\n");
+        return "";
+    }
+    
+    // Parse response
     JsonReader reader;
     JsonValue root;
-    if (!reader.parse(resp, root)){
-        HostPrintUTF8("{$CP0=Failed to parse the list of the deployed models from Ollama.$}{$CP936=解析Ollama本地部署模型名称列表时失败：无法解析json。}");
-        array<string> empty;
-        return empty;
+    
+    if (!reader.parse(response, root)) {
+        HostPrintUTF8("Failed to parse translation response\n");
+        return "";
     }
-    JsonValue models = root["models"];
-    int count = models.size();
-    int i = 0;
-    array<string> res;
-    for (i=0 ; i<count;i++){
-        res.insertLast(models[i]["name"].asString());
+    
+    // Extract translated text
+    JsonValue choices = root["choices"];
+    if (!choices.isArray() || choices.size() == 0) {
+        HostPrintUTF8("Invalid response format - no choices\n");
+        return "";
     }
-    return res;
+    
+    JsonValue firstChoice = choices[0];
+    JsonValue message = firstChoice["message"];
+    if (!message.isObject()) {
+        HostPrintUTF8("Invalid response format - no message\n");
+        return "";
+    }
+    
+    JsonValue content = message["content"];
+    if (!content.isString()) {
+        HostPrintUTF8("Invalid response format - no content\n");
+        return "";
+    }
+    
+    string translatedText = content.asString();
+    
+    // Clean up the translated text
+    translatedText = RemoveThinkingTags(translatedText);
+    translatedText = TrimString(translatedText);
+    
+    // Add RTL marker for certain languages
+    if (DstLang == "fa" || DstLang == "ar" || DstLang == "he") {
+        translatedText = "\u202B" + translatedText;
+    }
+    
+    // Set output language encoding
+    SrcLang = "UTF8";
+    DstLang = "UTF8";
+    
+    return translatedText;
+}
+
+// ========================
+// PLUGIN LIFECYCLE
+// ========================
+
+void OnInitialize() {
+    HostPrintUTF8("Ollama translation plugin loaded\n");
+    
+    // Load saved settings
+    g_apiKey = HostLoadString("api_key_ollama", "");
+    g_selectedModel = HostLoadString("selected_model_ollama", DEFAULT_MODEL_NAME);
+    
+    // Initialize API configuration
+    g_reasoningConfig.DetectModelType(g_selectedModel);
+    
+    if (!g_apiKey.empty()) {
+        HostPrintUTF8("Loaded saved configuration\n");
+        g_isPluginActive = true;
+    } else {
+        g_isPluginActive = false;
+    }
+}
+
+void OnFinalize() {
+    HostPrintUTF8("Ollama translation plugin unloaded\n");
 }
