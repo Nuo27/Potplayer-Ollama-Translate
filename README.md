@@ -3,6 +3,7 @@
 这是一个为 Potplayer 开发的插件，可以使用 Ollama 进行实时字幕翻译。
 
 - Ollama 原生 api 支持，新增对 gpt-oss 的思考强度支持
+- 新增对 ollama cloud 模型的支持 (实验性)
 - [功能特性](#功能特性)
 - 测试支持到 ollama 0.13.0 版本
 
@@ -27,6 +28,7 @@
 
 ## 功能特性
 
+- 新增对 ollama cloud 模型的支持 (实验性)
 - Ollama 原生 api 支持，新增对 gpt-oss 的思考强度支持
 - 支持推理模型的思考功能，包括 qwen3, deepsseek-r1, gpt-oss 等
 - 可以配置的上文历史

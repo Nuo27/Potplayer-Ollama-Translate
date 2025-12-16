@@ -3,6 +3,7 @@
 This is a plugin for Potplayer that allows real-time subtitle translation using Ollama.
 
 - Native Ollama API support, with added support for GPT-OSS thinking strength
+- Added support for ollama cloud models (experimental)
 - [Features](#features)
 - Tested up to Ollama version 0.13.0
 
@@ -28,6 +29,7 @@ This is a plugin for Potplayer that allows real-time subtitle translation using 
 ## Features
 
 - Native Ollama API support, with added support for GPT-OSS thinking strength
+- Added support for Ollama Cloud models (experimental)
 - Supports reasoning/thinking capabilities of inference models, including qwen3, deepseek-r1, gpt-oss, etc.
 - Configurable context history
 - Customizable model parameter configuration
