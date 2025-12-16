@@ -5,35 +5,37 @@
 // ========================
 // TRANSLATION PROMPTS
 // ========================
-
 const string SYSTEM_PROMPT_BASE =
-    "You are a professional multilingual translator, highly skilled at accurately and naturally translating user-provided text into the target language.\n"
+    "You are a professional simultaneous interpreter with broad multidisciplinary expertise. "
+    "You provide fluent, accurate, and natural real-time translations, even when the source text is incomplete, fragmented, or contains grammatical errors.\n"
     "\n"
-    "Rules:\n"
-    "- Output only the final translation. Do not add explanations, notes, or any extra content.\n"
-    "- Follow the principles of accuracy, clarity, and elegance.\n"
-    "- Convey the factual meaning and context of the original text with precision.\n"
-    "- Even when paraphrasing, preserve the original formatting and layout, as well as all terminology, names, and abbreviations.\n"
-    "- Use the most natural expressions in the target language; avoid literal translations and translationese.\n"
-    "- If the original contains cultural nuances, wordplay, or special context, adapt them to expressions suitable for the target culture.\n"
-    "- Correct any incorrect sentence breaks in the original and ensure the translation reads smoothly.\n"
+    "Your task is to translate the user's input into the target language with maximum semantic fidelity, natural flow, and contextual accuracy.\n"
     "\n"
-    "Strategy:\n"
-    "Perform the translation in three steps, but only output the final translated result:\n"
-    "1. Produce a direct translation based on the content, keeping the original formatting and without omitting any information.\n"
-    "2. Based on the direct translation, identify specific issues. Describe them accurately without being vague and without adding content not found in the original. Issues may include (but are not limited to):\n"
-    "- Expressions that do not conform to natural usage in the target language.\n"
-    "- Sentences that are unclear or awkward—identify the location without giving revision suggestions; these will be handled in step 3.\n"
-    "- Parts that are obscure or difficult to understand.\n"
-    "- Incorrect sentence breaks corrected to ensure coherence.\n"
-    "3. Rewrite the translation (paraphrase) based on steps 1 and 2, preserving the original meaning while making the text easier to understand and more natural in the target language, without altering the original formatting.\n"
-    "\n";
-    
-const string SYSTEM_PROMPT_END =  "Now finish the user's translate task following the above instructions and only return the final translated text.\n";
+    "ABSOLUTE RULES (MUST FOLLOW):\n"
+    "1. Output ONLY the final translated text.\n"
+    "2. Do NOT output explanations, notes, labels, commentary, analysis, or any extra content.\n"
+    "3. Preserve the original meaning, tone, intent, structure, and formatting as closely as possible.\n"
+    "4. Preserve all proper names, technical terms, abbreviations, numbers, symbols, code, placeholders, and tags exactly as they appear in the source text.\n"
+    "5. Do NOT add, remove, or reinterpret information.\n"
+    "6. Do NOT use Markdown unless the source text explicitly uses Markdown.\n"
+    "\n"
+    "TRANSLATION GUIDELINES:\n"
+    "- Use natural, fluent, idiomatic expressions when literal translation would sound unnatural.\n"
+    "- Maintain smooth readability suitable for spoken or subtitle output.\n"
+    "- If the source text is awkward or ungrammatical, correct it naturally without changing its meaning.\n"
+    "- Do NOT censor, summarize, or embellish.\n"
+    "\n"
+    "Plain text output only.\n";
 
-const string USER_PROMPT_BASE = "Treat following line as plain text and translate: \n";
 
-const string CONTEXT_PROMPT = "Previous Context Sentence is provided below. Please use it to inform your translation. DO NOT include it in your response. \n";
+const string USER_PROMPT_BASE =
+    "Treat the the sentence inside <Text> tags as plain text and translate";
+
+const string CONTEXT_PROMPT =
+    "The following content is provided as reference context only.\n"
+    "It is NOT part of the text to translate.\n"
+    "Do NOT translate, modify, or include it in the output.\n"
+    "Use it only to understand context, tone, and continuity.\n";
 
 const string SYSTEM_PROMPT_OLD = 
 "You are a professional subtitle translator. Your task is to fluently translate text into the target language. Strictly follow these rules:\n"
@@ -57,22 +59,21 @@ const string SYSTEM_PROMPT_BASIC_OLD_TWO_STEP =
 // ========================
 
 // Core Settings
-const string DEFAULT_MODEL_NAME = "qwen3:30b-a3b-instruct-2507-q4_K_M";
+const string DEFAULT_MODEL_NAME = "qwen3-vl:30b-a3b-instruct-q4_K_M";
 
 // State Variables
 string g_selectedModel = DEFAULT_MODEL_NAME;
 // replace the value with const prompt field name
 string userPrompt = USER_PROMPT_BASE;
 string systemPrompt = SYSTEM_PROMPT_BASE;
-string systemPromptEnd = SYSTEM_PROMPT_END;
 bool g_isPluginActive = true;
 
 // Model Configuration
 class ModelConfig {
-    float temperature = 0.2;
+    float temperature = 0.5;
     float topP = 0.9;
     int topK = 40;
-    float minP = 0.05;
+    float minP = 0.1;
     float repeatPenalty = 1.1;
     int maxTokens = 2048;
 
@@ -119,30 +120,31 @@ class ReasoningConfig {
 // Translation Context History Management
 class ContextHistory {
     array<string> history;
-    int maxSize = 50;
-    int contextCount = 10;
+    int maxSize = 10;
+    int contextCount = 5;
     bool enabled = true;
 
     void AddEntry(const string &in text) {
-        if (!enabled) return;
-       
+        if (!enabled || text.length() == 0) return;
+
         history.insertLast(text);
         if (history.length() > uint(maxSize)) {
             history.removeAt(0);
         }
     }
-   
+
     string GetContext() {
         if (!enabled || history.length() == 0) return "";
 
         string context = CONTEXT_PROMPT + "\n";
-        
-        // Add recent original sentences
+        context += "<Context>\n";
+
         int startIdx = max(0, int(history.length()) - contextCount);
         for (int i = startIdx; i < int(history.length()); ++i) {
-            context += "- \"" + history[i] + "\"\n";
+            context += history[i] + "\n";
         }
-        
+
+        context += "</Context>\n";
         return context;
     }
 }
@@ -154,7 +156,11 @@ class ContextHistory {
 class OllamaAPI {
     string baseUrl = "http://127.0.0.1:11434";
     string chatRoute = "/api/chat";
+    string openAIRoute = "/v1/chat/completions";
     string userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
+    string ContentType = "Content-Type: application/json";
+
+    bool useOllamaNative = true;
 
     // API Key for OLLAMA CLOUD
     bool useAPIKey = false;
@@ -243,7 +249,7 @@ class OllamaAPI {
     // Return the think options 
     // When true, returns separate thinking output in addition to content. Can be a boolean (true/false) or a string ("high", "medium", "low") for supported models.
     string GetThinkOption() {
-        HostPrintUTF8("modelArchitecture: " + modelArchitecture);
+        HostPrintUTF8("modelArchitecture: " + modelArchitecture + "\n");
 
         if (modelArchitecture == "gpt-oss" && !g_reasoningConfig.enableThinking) {
             return "\"low\"";
@@ -264,26 +270,51 @@ class OllamaAPI {
                     : "false") + "\"";
     }
 
-    
-    string SendTranslationRequest(const string &in requestData) {
-        string url = "";
-        string header = "Content-Type: application/json";
-        
-        // Add the Authorization header with Bearer token if API key is used
-        // And set the url to ollama cloud
-        if (g_ollama_api.useAPIKey) {
-            // Append the API key to the Authorization header
-            string authHeader = "Authorization: Bearer " + g_ollama_api.apiKey;
-            header += "\n" + authHeader; 
-            url = ollamaCloudUrl + chatRoute;
-        } else {
-            url = baseUrl + chatRoute;
-        }
-        HostPrintUTF8("request url: "+ url + "\n");
-        HostPrintUTF8("request header: "+ header + "\n");
-        HostPrintUTF8("request data: "+ requestData + "\n");
+    // Build the header for the request
+    string BuildHeader(bool useAPIKey, const string &in apiKey)
+    {
+        string header = ContentType;
 
-        return HostUrlGetString(baseUrl + chatRoute, userAgent, header, requestData);
+        if (useAPIKey) {
+            // Add the Authorization header if an API key is supplied.
+            header += "\nAuthorization: Bearer " + apiKey;
+        }
+
+        return header;
+    }
+    // Build the URL for the request
+    string BuildUrl(bool useAPIKey, bool useOllamaNative,
+                const string &in baseUrl, const string &in cloudUrl)
+    {
+        // ollama cloud endpoint
+        if (useAPIKey) {
+            return cloudUrl + chatRoute;
+        }
+
+        // ollama native endpoint
+        if (useOllamaNative) {
+            return baseUrl + chatRoute;
+        }
+
+        // openai compatible endpoint
+        return baseUrl + openAIRoute;
+    }
+    // Send the translation request to the API
+    string SendTranslationRequest(const string &in requestData)
+    {
+        string url = BuildUrl(g_ollama_api.useAPIKey,
+                            useOllamaNative,
+                            baseUrl,
+                            ollamaCloudUrl);
+
+        string header = BuildHeader(g_ollama_api.useAPIKey,
+                                    g_ollama_api.apiKey);
+
+        HostPrintUTF8("request url   : " + url + "\n");
+        HostPrintUTF8("request header: " + header + "\n");
+        HostPrintUTF8("request data  : " + requestData + "\n");
+
+        return HostUrlGetString(url, userAgent, header, requestData);
     }
     
     private string FormatModelInfo(JsonValue &in root) {
@@ -396,49 +427,45 @@ class OllamaAPI {
     }
     
     // build translation request string
-    string BuildTranslationRequest(const string &in text, const string &in srcLang, const string &in dstLang) {
-        // Build prompt
+    string BuildTranslationRequest(const string &in text,
+                               const string &in srcLang,
+                               const string &in dstLang)
+    {
         string prompt = "";
-        
-        // Add context if enabled
         string context = "";
         if (g_contextHistory.enabled) {
-            context += g_contextHistory.GetContext();
+            context = g_contextHistory.GetContext();
         }
-        
-        // Add main translation request
+
+        prompt += context;
         prompt += userPrompt;
-        if (!srcLang.empty()) {
+
+        if (!srcLang.empty() && srcLang != "auto") {
             prompt += " from " + srcLang;
         }
-        prompt += " to " + dstLang + ":\n";
-        prompt += text;
-        
-        // Build messages array
-        string escapedSystem = EscapeJsonString(systemPrompt + context + systemPromptEnd);
-        string escapedUser = EscapeJsonString(prompt);
+        prompt += " to " + dstLang + ".\n";
+        prompt += "<Text>" + text + "</Text>";
 
-        
+        string escapedSystem = EscapeJsonString(systemPrompt);
+        string escapedUser   = EscapeJsonString(prompt);
+
         string messages = "["
             + "{\"role\":\"system\",\"content\":\"" + escapedSystem + "\"},"
             + "{\"role\":\"user\",\"content\":\"" + escapedUser + "\"}"
             + "]";
-        
-        // Build request data
+
         string requestData = "{"
             + "\"model\":\"" + g_selectedModel + "\","
             + "\"messages\":" + messages;
-        
-        // Add model parameters
+
         dictionary params = g_modelConfig.GetActiveParams();
         if (params.getSize() > 0) {
             requestData += ",\"options\":{";
             array<string> keys = params.getKeys();
-            
             for (uint i = 0; i < keys.length(); i++) {
                 string key = keys[i];
                 requestData += "\"" + key + "\":";
-        
+
                 float fVal;
                 int iVal;
                 if (params.get(key, fVal)) {
@@ -446,25 +473,22 @@ class OllamaAPI {
                 } else if (params.get(key, iVal)) {
                     requestData += "" + iVal;
                 }
-                
+
                 if (i < keys.length() - 1) {
                     requestData += ",";
                 }
             }
             requestData += "}";
         }
-        
-        // Add native thinking support if available
+
         if (g_reasoningConfig.ollamaSupportsNativeThinking) {
             requestData += ",\"think\": " + g_ollama_api.GetThinkOption();
         }
-        // stream to false
-        requestData += ",\"stream\":false"; 
-        
-        requestData += "}";
-        
-        return requestData;
 
+        requestData += ",\"stream\":false";
+        requestData += "}";
+
+        return requestData;
     }
 }
 
@@ -573,14 +597,14 @@ string ServerLogin(string User, string Pass) {
     // PLEASE comment out the following test code when you are done testing and the translation is working as expected.
     // This is just for testing purposes to ensure that the translation function works correctly.
 
-    // // Send a test request and check the response 
-    // string test_srcLang = "en";
-    // string test_dstLang = "fr";
-    // string test_text = "Hello, how are you?";
+    // Send a test request and check the response 
+    // string test_srcLang = "auto";
+    // string test_dstLang = "jp";
+    // string test_text = "Why is the sky blue?";
     // string translated_text = Translate(test_text, test_srcLang, test_dstLang);
     
     // if(!translated_text.empty() && translated_text != "") {
-    //     HostPrintUTF8("Translation task completed successfully!\n" + "Test Text: " + test_text + "\n" + "Translated Text: " + translated_text + "\n" );
+    //     HostPrintUTF8("Translation task completed successfully!\n" + test_srcLang + " -> " + test_dstLang + "\n"+ "Test Text: " + test_text + "\n" + "Translated Text: " + translated_text + "\n" );
     // }
     // else {
     //     HostPrintUTF8("Translation task failed. Please check the settings");
@@ -624,7 +648,6 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
     if (!g_isPluginActive) {
         return "Plugin is not loaded normally, please check settings";
     }
-    LoadUserConfig();
     
     // Validate target language
     if (DstLang.empty() || DstLang == "Auto" || DstLang.find("자동") != -1 || DstLang.find("自動") != -1) {
@@ -652,39 +675,7 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
         return "";
     }
     
-    // Parse response
-    JsonReader reader;
-    JsonValue root;
-    
-    if (!reader.parse(response, root)) {
-        HostPrintUTF8("Failed to parse translation response\n");
-        return "";
-    }
-    
-    // Extract translated text 
-    // This step is no longer needed as turning into ollama api returns the response directly
-
-    // JsonValue choices = root["choices"];
-    // if (!choices.isArray() || choices.size() == 0) {
-    //     HostPrintUTF8("Invalid response format - no choices\n");
-    //     return "";
-    // }
-    
-    // JsonValue firstChoice = choices[0];
-    JsonValue message = root["message"];
-    if (!message.isObject()) {
-        HostPrintUTF8("Invalid response format - no message\n");
-        return "";
-    }
-    
-    JsonValue content = message["content"];
-    if (!content.isString()) {
-        HostPrintUTF8("Invalid response format - no content\n");
-        return "";
-    }
-    
-    string translatedText = content.asString();
-    
+    string translatedText = ExtractTranslatedText(response);
     
     // this step shall not be processed since 0.9.0 and ollama moves thinking content to a seperate field
     // but i will keep this, feel free to remove it if you want.
@@ -704,6 +695,49 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
     
     return translatedText;
 }
+// -------------------------------------------------------------------
+//  Extract the translated content from the JSON response.
+//  -------------------------------------------------------------------
+string ExtractTranslatedText(const string response)
+{
+    JsonReader reader;
+    JsonValue root;
+
+    if (!reader.parse(response, root)) {
+        HostPrintUTF8("Failed to parse translation response\n");
+        return "";
+    }
+
+    HostPrintUTF8("response: " + response + "\n");
+
+    JsonValue message;
+
+    if (!g_ollama_api.useOllamaNative) {
+        JsonValue choices = root["choices"];
+        if (!choices.isArray() || choices.size() == 0) {
+            HostPrintUTF8("Invalid response format - no choices\n");
+            return "";
+        }
+
+        message = choices[0]["message"];
+    }
+    else {
+        message = root["message"];
+    }
+
+    if (!message.isObject()) {
+        HostPrintUTF8("Invalid response format - no message\n");
+        return "";
+    }
+
+    JsonValue content = message["content"];
+    if (!content.isString()) {
+        HostPrintUTF8("Invalid response format - no content\n");
+        return "";
+    }
+
+    return content.asString();
+}
 
 // ========================
 // PLUGIN LIFECYCLE
@@ -714,7 +748,6 @@ void OnInitialize() {
     // Open the console for debugging purposes
     // PLEASE comment out the following line if debugging is not needed
     // HostOpenConsole();
-
     HostPrintUTF8("Ollama translation plugin initialized\n");
 }
 
@@ -730,7 +763,7 @@ string GetTitle() {
 }
 
 string GetVersion() {
-    return "2.1";
+    return "2.2";
 }
 
 string GetDesc() {

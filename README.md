@@ -17,6 +17,9 @@
   - [功能特性](#功能特性)
   - [使用方法](#使用方法)
   - [注意事项](#注意事项)
+  - [更新](#更新)
+    - [V2.2 主要更新](#v22-主要更新)
+    - [TODO](#todo)
   - [自定义配置](#自定义配置)
   - [性能表现](#性能表现)
   - [参考资料](#参考资料)
@@ -42,21 +45,34 @@
 
 ## 注意事项
 
-- **请确保将模型和 ollama 更新到 >= 0.9.0 版本** ~~以使用 ollama 的原生思考支持。qwen3 的思考提示词尚未移除，因为在我的测试中它并没有真正起作用~~
-- v2.1 版本的插件使用 ollama 的原生 api，并完全支持 ollama 的原生思考参数，基于 ollama 0.13.0 测试。
-- 旧版本的插件仍然使用 OpenAI compatibility 的 api，仍支持对模型的自定义参数，但是原生的思考是不可用的。
-- ~~使用旧模板和功能的 Qwen3、Deepseek-r1 以及 ollama <0.9.0 版本是**兼容的**，但其他模型可能不兼容。可以在 `ModelConfig` 下手动添加它们的思考标签和 `bool` 值，在 `options` 字段中添加项目~~
+- **请确保将模型和 ollama 更新到 >= 0.9.0 版本**
 - 插件提供了一些**提示词**，请根据翻译质量自行调整。
 - 请确保使用**支持多语言任务**的模型。
 - 通常来说，推理/思考（thinking）**应该关闭**，它会显著影响翻译速度，并且简单的翻译任务也不怎么需要推理。
 - 非常推荐使用**Instruct** 模型，如`qwen3:30b-a3b-instruct-2507-q4_K_M`，测试的模型可以参考[性能表现](#性能表现)部分。
+
+## 更新
+
+### V2.2 主要更新
+
+- 更新了提示词，提高准确性和通顺度，优化不完整句子的指令
+- 重构 API 请求构建，支持 Ollama 原生和 OpenAI 兼容的 API 请求
+  - 可以在 ollama api class 里 设定 `useOllamaNative = false`来使用 OpenAI 兼容的 API
+- 对于 ollama cloud 用户来说，在模型配置里填上 api key 应该能让你使用 cloud 模型。
+  - 没有进行深度测试，如果有问题请提 issue
+
+### TODO
+
+- 目前应该就这样了，翻译效果其实还是得看模型能力和提示词
+- 测试了 Terms 术语表, 直接替换并注入提示词，效果其实也差不太多，所以暂时不加入这个功能
+- 如果有其他需求，可以提 issue
 
 ## 自定义配置
 
 **模型选择**
 | 变量 | 描述 |
 |--------|-------------|
-| `DEFAULT_MODEL_NAME` | 默认模型名称（默认值：`"qwen3:30b-a3b-instruct-2507-q4_K_M"`）。**如果没有在 Potplayer 设置中配置模型，将使用该模型** |
+| `DEFAULT_MODEL_NAME` | 默认模型名称（默认值：`"qwen3-vl:30b-a3b-instruct-q4_K_M"`）。**如果没有在 Potplayer 设置中配置模型，将使用该模型** |
 
 **模型配置**  
 | 变量 | 示例值 | 描述 |
@@ -110,19 +126,19 @@
 **支持模型：**
 
 - 新增支持 gpt-oss
-- 现在插件应该支持所有 ollama 官方模型。
-- 也包括 hugginface 上的大部分模型框架，包括 qwen3moe，olmo granitehybrid apertus 等
-
-只要模型是原生 ollama api 支持的，插件应该都可以正常运行
+- 所有 ollama 官方支持的模型, 包括 huggingface 的模型, 通过 ollama 配置的自定义模型
 
 > 意思是只要你的模型能在 ollama app 或 Ollama cli 里运行，插件就是支持的。
 
 **推荐**
 
-- qwen3:30B-A3B-Instruct-2507-Q3_K_S
+- qwen3-vl:30b-a3b-instruct-q4_K_M
+- qwen3:30b-a3b-instruct-2507-q4_K_M
 - gpt-oss:20b
+- **qwen3-vl:8b-instruct**
+- ministral-3:14b-instruct-2512-q4_K_M
 - gemma3:12b/gemma3n:e4b
-- 对于配置不高的用户，可以考虑 qwen3:4b-instruct
+- 对于配置不高的用户，可以考虑 qwen3:4b-instruct, qwen3-vl:4b-instruct
 
 > 请测试你的 token/s，响应过慢的模型可能会导致翻译延迟或失败。根据你的硬件配置和需求进行配置，以确保最佳性能。
 

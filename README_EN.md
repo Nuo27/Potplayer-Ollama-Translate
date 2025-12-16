@@ -2,9 +2,9 @@
 
 This is a plugin for Potplayer that allows real-time subtitle translation using Ollama.
 
-- Native Ollama API support, with added thinking-strength support for gpt-oss
+- Native Ollama API support, with added support for GPT-OSS thinking strength
 - [Features](#features)
-- Tested work with ollama 0.13.0
+- Tested up to Ollama version 0.13.0
 
 <div align="center">
   <a href="https://github.com/Nuo27/Potplayer-Ollama-Translate/blob/master/README.md">简体中文</a> | <strong>English</strong>
@@ -16,19 +16,22 @@ This is a plugin for Potplayer that allows real-time subtitle translation using 
   - [Table of Contents](#table-of-contents)
   - [Features](#features)
   - [Usage](#usage)
-  - [NOTES](#notes)
-  - [Customization](#customization)
+  - [Notes](#notes)
+  - [Updates](#updates)
+    - [V2.2 Major Updates](#v22-major-updates)
+    - [TODO](#todo)
+  - [Custom Configuration](#custom-configuration)
   - [Performance](#performance)
   - [References](#references)
   - [License](#license)
 
 ## Features
 
-- Native Ollama API support, with added thinking-strength support for gpt-oss
-- Supports reasoning/thinking features for models like qwen3, deepseek-r1, gpt-oss, etc.
+- Native Ollama API support, with added support for GPT-OSS thinking strength
+- Supports reasoning/thinking capabilities of inference models, including qwen3, deepseek-r1, gpt-oss, etc.
 - Configurable context history
-- Customizable model parameter settings
-- New translation prompts and strategies
+- Customizable model parameter configuration
+- Brand-new translation prompts and translation strategy
 
 ## Usage
 
@@ -40,24 +43,39 @@ This is a plugin for Potplayer that allows real-time subtitle translation using 
 6. In the extension settings, set up your model name if you want to use a different one than the default. You wont need the API key since its for ollama
 7. All done. Enjoy live translation!
 
-## NOTES
+## Notes
 
-- **Please ensure the model and Ollama are updated to version >= 0.9.0** ~~to use Ollama’s native thinking support. The thinking prompt for qwen3 has not been removed yet because in my tests it didn’t really work..~~
-- Version v2.1 of the plugin uses the native Ollama API and fully supports Ollama’s thinking parameters. It has been tested under ollama 0.13.0.
-- Older plugin versions still use the OpenAI-compatible API. Custom parameters remain supported, but native thinking is not available.
-- ~~Qwen3, Deepseek-r1 with old template & capabilities and ollama <0.9.0 are **compatible** but other models might not compatible and you can manually add their think tags and `bool` value under `ModelConfig` to add a item in `options` field.~~
-- The plugin provides several prompt templates; adjust them as needed based on translation quality.
-- Ensure you use a model that supports multilingual tasks.
-- Generally, reasoning/thinking should be turned off because it significantly slows down translation and is usually unnecessary for simple translation tasks.
-- Highly recommended to use Instruct models, such as `qwen3:30b-a3b-instruct-2507-q4_K_M`
-- Tested models can be found in [Performance](#performance)
+- **Make sure your model and Ollama are updated to version >= 0.9.0**
+- The plugin provides several **prompt templates**; please adjust them according to translation quality.
+- Ensure you are using a model that **supports multilingual tasks**.
+- In general, reasoning/thinking **should be turned off**, as it significantly impacts translation speed, and simple translation tasks rarely require reasoning.
+- Highly recommended to use **Instruct** models, such as `qwen3:30b-a3b-instruct-2507-q4_K_M`. Tested models can be found in the [Performance](#performance) section.
 
-## Customization
+## Updates
+
+### V2.2 Major Updates
+
+- Updated prompts to improve accuracy and fluency, and optimized instructions for incomplete sentences
+- Refactored API request construction to support both native Ollama and OpenAI-compatible API requests
+
+  - You can set `useOllamaNative = false` in the Ollama API class to use the OpenAI-compatible API
+
+- For Ollama Cloud users, filling in the API key in the model configuration should allow you to use cloud models
+
+  - Not extensively tested; please open an issue if you encounter problems
+
+### TODO
+
+- The current state is likely final; translation quality ultimately depends on model capability and prompt quality
+- Tested a Terms glossary approach by directly replacing terms and injecting them into prompts; results were similar tbh, so no plan to add it yet
+- If you have other requirements, feel free to open an issue
+
+## Custom Configuration
 
 **Model Selection**
 | Variable | Description |
 | -------- | ----------- |
-| `DEFAULT_MODEL_NAME` | Default model name (default: `"qwen3:30b-a3b-instruct-2507-q4_K_M"`). **Used when no model is configured in Potplayer.** |
+| `DEFAULT_MODEL_NAME` | Default model name (default: `"qwen3-vl:30b-a3b-instruct-q4_K_M"`). **Used when no model is configured in Potplayer.** |
 
 **Model Configuration**  
 | Variable | Example Value | Description |
@@ -69,7 +87,7 @@ This is a plugin for Potplayer that allows real-time subtitle translation using 
 | `repeatPenalty` | `1.0 - 2.0` | Penalizes repeated tokens to reduce duplication. |
 | `maxTokens` | `1024-2048` | Max number of tokens generated. |
 
-> You can add more parameters if needed, but usually only temperature and topP require adjustment. Make sure to update the `GetActiveParams` method accordingly
+> You can add other parameters if needed, but generally you only need to adjust temperature and topP. Make sure to update the `GetActiveParams` method accordingly.
 
 **Reasoning/Thinking Configuration**  
 | Variable | Example Value | Description |
@@ -84,7 +102,7 @@ This is a plugin for Potplayer that allows real-time subtitle translation using 
 | `contextCount` | `10` | Number of recent sentences to include in the context
 | `maxSize` | `50` | Maximum number of history entries |
 
-> if you increase the entries significantly, the response time might also increase significantly due to the larger context size. and you got to adjust tokens as well.
+> If you significantly increase the number of entries, response time may increase noticeably due to larger context size. You may also need to adjust the token limit accordingly.
 
 **Prompts**  
 The plugin provides several prompt templates that can be freely customized.
@@ -104,32 +122,34 @@ The plugin provides several prompt templates that can be freely customized.
 | `systemPrompt`    | `SYSTEM_PROMPT_BASE` | Uses SYSTEM_PROMPT_BASE as system prompt |
 | `systemPromptEnd` | `SYSTEM_PROMPT_END`  | Appended at end of system prompt         |
 
-> **Note**: Ensure your model can handle these prompts to avoid inaccurate or failed translations.
+> **Note:** Make sure your model can properly handle these prompts, otherwise translation results may be inaccurate or the plugin may not work correctly.
 
 ## Performance
 
 **Supported Models:**
 
-- Newly added support for gpt-oss
-- and the plugin should now support all official Ollama models
-- including most models in huggingface as long as the model is officially supported by ollama
+- Newly added support for GPT-OSS
+- all official Ollama supported models, including huggingface models, and custom models that is configured in Ollama
 
-> this means any model should work as long as it runs in Ollama app or through ollama cli
+> In other words, if your model can run in the Ollama app or Ollama CLI, it is supported by the plugin.
 
-**Recommendations**
+**Recommended Models**
 
-- qwen3:30B-A3B-Instruct-2507-Q3_K_S
+- qwen3-vl:30b-a3b-instruct-q4_K_M
+- qwen3:30b-a3b-instruct-2507-q4_K_M
 - gpt-oss:20b
+- **qwen3-vl:8b-instruct**
+- ministral-3:14b-instruct-2512-q4_K_M
 - gemma3:12b / gemma3n:e4b
-- for lower-end users, consider qwen3:4b-instruct
+- For lower-end systems, consider qwen3:4b-instruct or qwen3-vl:4b-instruct
 
-> Please test your tokens/s. Slow models may delay or fail translation.
+> Please test your tokens-per-second (token/s). Models with slow response times may cause translation delays or failures. Configure according to your hardware and needs to ensure optimal performance.
 
 ## References
 
-- Inspired by [PotPlayer_ollama_Translate](https://github.com/yxyxyz6/PotPlayer_ollama_Translate) and further built upon.
-- Written in [Angel Script](https://www.angelcode.com/angelscript/).
-- [Ollama](https://ollama.com/) for LLMs and API usage.
+- Inspired by [PotPlayer_ollama_Translate](https://github.com/yxyxyz6/PotPlayer_ollama_Translate) v1 and further developed based on it
+- Written using [AngelScript](https://www.angelcode.com/angelscript/)
+- Uses [Ollama](https://ollama.com/) to provide LLM and API support
 
 ## License
 
