@@ -37,7 +37,7 @@
 
 ## 使用方法
 
-1. 下载 `.as` 和 `.ico` 文件，将它们放置到 Potplayer 安装目录下的 `...\DAUM\PotPlayer\Extension\Subtitle\Translate` 文件夹中。
+1. 下载 [release](https://github.com/Nuo27/Potplayer-Ollama-Translate/releases) 页面里的 `.7z` 或 `.zip` 压缩包，解压后得到 `.as` 和 `.ico` 文件，将它们放置到 Potplayer 安装目录下的 `...\DAUM\PotPlayer\Extension\Subtitle\Translate` 文件夹中。
 2. 打开 `.as` 文件，修改 `DEFAULT_MODEL_NAME` 为目标模型名称。或者也可以保持默认设置，稍后在扩展设置中配置。
 3. 如果需要，可以自由调整**提示词**、**模型配置**和上下文历史大小。
 4. 如果使用推理模型，请确保设置推理模型配置。`强烈建议关闭推理功能。`

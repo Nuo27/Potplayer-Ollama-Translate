@@ -37,7 +37,7 @@ This is a plugin for Potplayer that allows real-time subtitle translation using 
 
 ## Usage
 
-1. Download the `.as` and `.ico` files put them to your Potplayer's installation directory under `...\DAUM\PotPlayer\Extension\Subtitle\Translate` folder.
+1. Download the `.7z` or `.zip` compressed archive from the [release](https://github.com/Nuo27/Potplayer-Ollama-Translate/releases) page, extract the `.as` and `.ico` files, and put them to your Potplayer's installation directory under `...\DAUM\PotPlayer\Extension\Subtitle\Translate` folder.
 2. Open the `.as` file and modify `DEFAULT_MODEL_NAME` to your target model name. Or you can leave it and set it up in the extension settings later.
 3. Feel free to twerk around with the **prompts**, **model configuration** and context history size if you want to.
 4. Make sure to set up reasoning model configuration if you are using a reasoning model. `Reasoning is highly recommended to be turned off.`
