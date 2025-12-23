@@ -8,7 +8,7 @@ This is a plugin for Potplayer that allows real-time subtitle translation using 
 - Tested up to Ollama version 0.13.0
 
 <div align="center">
-  <a href="https://github.com/Nuo27/Potplayer-Ollama-Translate/blob/master/README.md">简体中文</a> | <strong>English</strong>
+  <a href="https://github.com/Nuo27/Potplayer-Ollama-Translate/blob/main/README.md">简体中文</a> | <strong>English</strong>
 </div>
 
 ## Table of Contents

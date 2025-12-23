@@ -8,7 +8,7 @@
 - 测试支持到 ollama 0.13.0 版本
 
 <div align="center">
-  <strong>简体中文</strong> | <a href="https://github.com/Nuo27/Potplayer-Ollama-Translate/blob/master/README_EN.md">English</a>
+  <strong>简体中文</strong> | <a href="https://github.com/Nuo27/Potplayer-Ollama-Translate/blob/main/README_EN.md">English</a>
 </div>
 
 ## 目录
