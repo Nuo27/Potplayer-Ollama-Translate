@@ -31,6 +31,7 @@ string GetPasswordText() {
 }
 
 void OnInitialize() {
+    // Uncomment the following func for debugging
     // HostOpenConsole();
     HostPrintUTF8("Ollama translation plugin initialized\n");
 }
@@ -43,25 +44,28 @@ void OnFinalize() {
 // PROMPTS
 // ========================
 const string SYSTEM_PROMPT_BASE =
-"You are a professional simultaneous interpreter.\n"
-"Translate from {{from}} into {{to}} with natural, fluent, native-sounding output.\n"
-"Preserve meaning, tone, emotion, and speaker intent.\n"
+"You are a real-time interpreter.\n"
+"Translate the input from {{from}} to {{to}}.\n"
 "\n"
-"Context & History:\n"
-"- Reference context and prior turns are for tone, intent, and continuity only\n"
-"- Never translate or quote context or history\n"
-"- If context conflicts with the current text, translate the current text faithfully\n"
-"- Assume the same speaker unless stated otherwise\n"
-"\n"
-"Rules:\n"
+"Core Requirements:\n"
 "- Output ONLY the translation in {{to}}\n"
-"- Do NOT add explanations or commentary\n"
-"- Keep names, numbers, symbols, tags, and formatting unchanged\n"
-"- Smooth disfluencies only when it improves natural spoken flow\n"
-"- Do not add, omit, or reinterpret meaning\n"
-"- If input is fragmentary or incomplete, translate it naturally as-is\n"
+"- Preserve original meaning, tone, and intent\n"
+"- Keep names, numbers, symbols, and formatting unchanged\n"
 "\n"
-"Follow the rules strictly, output PLAIN TEXT ONLY.";
+"Context Handling:\n"
+"- Context/history may be provided for reference\n"
+"- Use it only to maintain tone and continuity\n"
+"- NEVER translate or repeat context/history\n"
+"\n"
+"Style Rules:\n"
+"- Produce natural, fluent, native-sounding output in {{to}}\n"
+"- Lightly smooth disfluencies if needed for clarity\n"
+"- Do NOT add, omit, or change meaning\n"
+"- If input is incomplete, translate it as-is\n"
+"\n"
+"Strict Rules:\n"
+"- No explanations, comments, or extra text\n"
+"- Output plain text only\n";
 
 const string USER_PROMPT_BASE =
 "{{context_prompt}}"
@@ -160,8 +164,8 @@ class Config {
     string thinkStrength = "";
     // Context
     bool contextEnabled = true;
-    int contextMaxSize = 10;
-    int contextCount = 5;
+    int contextMaxSize = 20;
+    int contextCount = 7;
     string contextPrompt = CONTEXT_PROMPT_BASE;
 
     string systemPrompt = SYSTEM_PROMPT_BASE;
@@ -616,9 +620,9 @@ void SaveLoginConfig() {
 }
 
 void RunLoginTest() {
-    string testSrcLang = "en";
+    string testSrcLang = "auto";
     string testDstLang = "zh-CN";
-    string testText = "Hello";
+    string testText = "Why is the sky blue?";
 
     HostPrintUTF8("Running login test translation: " + testSrcLang + " -> " + testDstLang + "\n");
 
@@ -668,7 +672,7 @@ string ServerLogin(string User, string Pass) {
     g_isPluginActive = true;
     HostPrintUTF8("Successfully configured Ollama translation plugin\n");
     HostPrintUTF8("Native thinking support: " + (g_api.ollamaSupportsNativeThinking ? "Yes" : "No") + "\n");
-    RunLoginTest();
+    // RunLoginTest();
 
     return "200 ok";
 }
