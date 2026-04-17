@@ -5,12 +5,13 @@ This is a plugin developed for PotPlayer that enables real-time subtitle transla
 <div align="center">
   <a href="https://github.com/Nuo27/Potplayer-Ollama-Translate/blob/main/README.md">简体中文</a> | <strong>English</strong>
 </div>
-
+<div align="right">
+Tested under Ollama 0.20.8-rc0
+</div>
 ## Features
 
 - Supports custom translation prompts → [Prompt Templates](#prompt-templates)
 - API support
-
   - Native local Ollama API
   - Ollama Cloud and custom APIs → [Advanced Configuration](#advanced-configuration-and-debug)
 
@@ -39,7 +40,7 @@ This is a plugin developed for PotPlayer that enables real-time subtitle transla
     - [Prompt Templates](#prompt-templates)
   - [Performance](#performance)
     - [Ollama](#ollama)
-    - [External API](#external-api)
+    - [Cloud API](#cloud-api)
   - [References](#references)
   - [License](#license)
 
@@ -54,7 +55,6 @@ This is a plugin developed for PotPlayer that enables real-time subtitle transla
    You can also open this panel via `Preferences → Extensions → Real-time Subtitle Translation`.
 5. In the real-time subtitle translation settings, set the translation engine to **Ollama Translate**. Usually, the source language can remain `auto`, and you can choose the target language as needed.
 6. In the account settings, set **Model Name** to the name of the model you are using.
-
    - If you are using **Ollama Cloud**, enter the corresponding **API Key**.
    - If you are using a local Ollama model, leave it empty.
      After confirming, make sure the status shows **“Ready”**.
@@ -67,29 +67,23 @@ This is a plugin developed for PotPlayer that enables real-time subtitle transla
 
 - **Custom Prompts**: In [Prompt Templates](#prompt-templates), you can customize system and user prompts based on the templates to adapt to different models and translation needs.
 - **Ollama Cloud**: Entering an Ollama Cloud API Key in the account settings and using Ollama Cloud models for translation.
-
   - You do not need to manually fill in `g_customEndpoint`, keep it empty. The plugin will automatically detect whether to use local or cloud based on whether the API Key is empty.
 
 - **Custom API**: Supports custom OpenAI-compatible API endpoints.
-
   - If you are using an OpenAI-compatible API, enter the base URL into `g_customEndpoint`.
-
     - Examples:
-
       - `http://localhost:1234/v1/chat/completions` – LM Studio
       - `https://openrouter.ai/api/v1/chat/completions` – OpenRouter API
 
     - The plugin will detect whether an OpenAI-compatible API is being used and check if the model is in the supported list.
 
   - If you provide a custom endpoint, ensure it is complete and ends with `/chat/completions`.
-
     - Example:
       - `https://api.z.ai/api/paas/v4/chat/completions` - Z.AI GLM API
       - `https://api.deepseek.com/chat/completions` - DeepSeek API
     - The plugin will skip the model check and directly use the endpoint and model provided for translation.
 
 - **Debug**:
-
   - Uncomment `HostOpenConsole` in the `OnInitialize` method to open the console and view runtime output.
   - Use `HostPrintUTF8` to output debug information.
   - Use `HostMessageBox` to display message boxes.
@@ -123,11 +117,9 @@ This is a plugin developed for PotPlayer that enables real-time subtitle transla
 
 - Updated prompts to improve accuracy and fluency, optimizing instructions for incomplete sentences.
 - Refactored API request construction to support both native Ollama and OpenAI-compatible APIs.
-
   - You can set `useOllamaNative = false` in the Ollama API class to use OpenAI-compatible APIs.
 
 - For Ollama Cloud users, entering an API key in model configuration should allow usage of cloud models.
-
   - Not extensively tested; please open an issue if you encounter problems.
 
 </details>
@@ -135,11 +127,9 @@ This is a plugin developed for PotPlayer that enables real-time subtitle transla
 ## TODO
 
 - [ ] Optimize prompts (long-term task)
-
   - Improve translation quality
 
 - [ ] Terminology glossary
-
   - A version was written and tested with several ~10–14B models, but the effect is similar for smaller models, so this feature is not included for now.
 
 ## About the Project
@@ -152,8 +142,8 @@ This is a plugin developed for PotPlayer that enables real-time subtitle transla
 
 ### Model Selection
 
-| Variable             | Description                                                                                                                                |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Variable             | Description                                                                                                           |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `DEFAULT_MODEL_NAME` | Default model name (default: `"qwen3.5:27b"`). **This model is used if no model is configured in PotPlayer settings** |
 
 ### Model Configuration
@@ -178,12 +168,12 @@ This is a plugin developed for PotPlayer that enables real-time subtitle transla
 
 ### Context History
 
-| Variable          | Example Value | Description                                              |
-| ----------------- | ------------- | -------------------------------------------------------- |
-| `contextEnabled`  | `true`        | Whether to use context history for translation           |
-| `contextCount`    | `5`           | Number of recent sentences included in context           |
-| `contextMaxSize`  | `10`          | Maximum number of history entries                       |
-| `contextPrompt`    | See below     | Custom context prompt template (see `CONTEXT_PROMPT_BASE` below) |
+| Variable         | Example Value | Description                                                      |
+| ---------------- | ------------- | ---------------------------------------------------------------- |
+| `contextEnabled` | `true`        | Whether to use context history for translation                   |
+| `contextCount`   | `5`           | Number of recent sentences included in context                   |
+| `contextMaxSize` | `10`          | Maximum number of history entries                                |
+| `contextPrompt`  | See below     | Custom context prompt template (see `CONTEXT_PROMPT_BASE` below) |
 
 > History entries contain source text, translation, and language metadata in the format: `[source language] source -> [target language] translation`
 > Significantly increasing the number of entries may increase response time due to larger context size. Adjust token limits accordingly.

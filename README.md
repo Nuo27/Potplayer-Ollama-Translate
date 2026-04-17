@@ -5,7 +5,9 @@
 <div align="center">
   <strong>简体中文</strong> | <a href="https://github.com/Nuo27/Potplayer-Ollama-Translate/blob/main/README_EN.md">English</a>
 </div>
-
+<div align="right">
+Ollama测试版本：0.20.8-rc0
+</div>
 ## 功能特性
 
 - 支持自定义翻译提示词
