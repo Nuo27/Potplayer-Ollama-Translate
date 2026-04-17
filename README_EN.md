@@ -1,4 +1,4 @@
-﻿# PotPlayer Ollama Real-Time Translation Plugin
+# PotPlayer Ollama Real-Time Translation Plugin
 
 This is a plugin developed for PotPlayer that enables real-time subtitle translation using Ollama or other custom APIs.
 
@@ -27,6 +27,7 @@ This is a plugin developed for PotPlayer that enables real-time subtitle transla
   - [Advanced Configuration and Debug](#advanced-configuration-and-debug)
   - [Notes](#notes)
   - [Updates](#updates)
+    - [V2.4 Major Updates](#v24-major-updates)
     - [V2.3 Major Updates](#v23-major-updates)
   - [TODO](#todo)
   - [About the Project](#about-the-project)
@@ -98,10 +99,18 @@ This is a plugin developed for PotPlayer that enables real-time subtitle transla
 - Local Ollama users **must ensure that both the model and Ollama are updated to version >= 0.9.0**.
 - Make sure to use models that **support multilingual tasks**.
 - Adjust prompts according to your desired translation quality.
-- Generally, reasoning/thinking **should be disabled**, as it significantly affects translation speed and is usually unnecessary for simple translation tasks.
-- Strongly recommended to use **Instruct** models, such as `qwen3:30b-a3b-instruct-2507-q4_K_M`. Recommended models can be found in the [Performance](#performance) section.
+- Generally, reasoning/thinking **should be disabled by default**, as it significantly affects translation speed and is usually unnecessary for simple translation tasks.
+- Strongly recommended to use **Instruct** models, such as `qwen3.5:27b`. Recommended models can be found in the [Performance](#performance) section.
 
 ## Updates
+
+### V2.4 Major Updates
+
+- Refactored plugin configuration and API layer
+- Implemented richer context history and context prompt templates with source/translation/lang metadata
+- Context is only injected into user/system prompts when enabled
+- Refactored login flow into native and custom handlers
+- Misc: tweaked language normalization and template substitution
 
 ### V2.3 Major Updates
 
@@ -145,7 +154,7 @@ This is a plugin developed for PotPlayer that enables real-time subtitle transla
 
 | Variable             | Description                                                                                                                                |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `DEFAULT_MODEL_NAME` | Default model name (default: `"qwen3-vl:30b-a3b-instruct-q4_K_M"`). **This model is used if no model is configured in PotPlayer settings** |
+| `DEFAULT_MODEL_NAME` | Default model name (default: `"qwen3.5:27b"`). **This model is used if no model is configured in PotPlayer settings** |
 
 ### Model Configuration
 
@@ -169,14 +178,16 @@ This is a plugin developed for PotPlayer that enables real-time subtitle transla
 
 ### Context History
 
-| Variable       | Example Value | Description                                    |
-| -------------- | ------------- | ---------------------------------------------- |
-| `enabled`      | `true`        | Whether to use context history for translation |
-| `contextCount` | `5`           | Number of recent sentences included in context |
-| `maxSize`      | `10`          | Maximum number of history entries              |
+| Variable          | Example Value | Description                                              |
+| ----------------- | ------------- | -------------------------------------------------------- |
+| `contextEnabled`  | `true`        | Whether to use context history for translation           |
+| `contextCount`    | `5`           | Number of recent sentences included in context           |
+| `contextMaxSize`  | `10`          | Maximum number of history entries                       |
+| `contextPrompt`    | See below     | Custom context prompt template (see `CONTEXT_PROMPT_BASE` below) |
 
+> History entries contain source text, translation, and language metadata in the format: `[source language] source -> [target language] translation`
 > Significantly increasing the number of entries may increase response time due to larger context size. Adjust token limits accordingly.
-> If no history is available, `<Context>` in the user prompt will be omitted.
+> Context is only injected into prompts when `contextEnabled` is true and `contextPrompt` is non-empty.
 
 ### Prompt Templates
 
@@ -184,8 +195,9 @@ You can apply the following variables in your prompt templates:
 
 - `{{from}}` – source language
 - `{{to}}` – target language
-- `{{optional_reference_context}}` – optional reference history
+- `{{optional_reference_context}}` – optional reference history (only populated when context history is enabled and non-empty)
 - `{{text_to_translate}}` – the text to be translated
+- `{{context_prompt}}` – context prompt template (only populated when context history is enabled and `contextPrompt` is non-empty)
 
 <details>
 <summary>SYSTEM_PROMPT_BASE</summary>
@@ -220,9 +232,7 @@ const string SYSTEM_PROMPT_BASE =
 
 ```
 const string USER_PROMPT_BASE =
-"<Context>\n"
-"{{optional_reference_context}}\n"
-"</Context>\n"
+"{{context_prompt}}"
 "\n"
 "Translate ONLY the text inside <Text> into {{to}}.\n"
 "The context is for tone and continuity only and must NOT be translated.\n"
@@ -230,6 +240,21 @@ const string USER_PROMPT_BASE =
 "<Text>\n"
 "{{text_to_translate}}\n"
 "</Text>";
+```
+
+</details>
+<details>
+<summary>CONTEXT_PROMPT_BASE</summary>
+
+```
+const string CONTEXT_PROMPT_BASE =
+"The context below provides reference material from prior turns.\n"
+"Use it for tone, intent, and continuity only.\n"
+"Do NOT translate or quote the context.\n"
+"\n"
+"<Context>\n"
+"{{optional_reference_context}}\n"
+"</Context>";
 ```
 
 </details>
@@ -337,30 +362,20 @@ You are a professional subtitle translator skilled in accurate and culturally ap
 
 > In other words, if your model can run in the Ollama app or Ollama CLI, it is supported by this plugin.
 
-**Recommended**
+Please test your tokens/sec. Models with slow response times may cause translation delays or failures. Configure according to your hardware and requirements to ensure optimal performance.
 
-- qwen3-vl:30b-a3b-instruct-q4_K_M
-- qwen3:30b-a3b-instruct-2507-q4_K_M
-- gpt-oss:20b
-- **qwen3-vl:8b-instruct**
-- ministral-3:14b-instruct-2512-q4_K_M
-- gemma3:12b / gemma3n:e4b
-- For lower-end systems, consider qwen3:4b-instruct or qwen3-vl:4b-instruct
+### Cloud API
 
-> Please test your tokens/sec. Models with slow response times may cause translation delays or failures. Configure according to your hardware and requirements to ensure optimal performance.
+**Tested Platforms:**
 
-### External API
+- Ollama Cloud
+- OpenRouter
+- Google Gemini
+- Z.Ai
+- DeepSeek
+- Minimax
 
-**Recommended**
-
-- Free tier
-  - GLM4.6V-flash - Z.AI
-  - gpt-oss-120b - OpenRouter
-  - MiMo-V2-Flash - OpenRouter
-- Paid tier
-  - Gemini 3 - Google
-
-> Only tested a few models, but since Potplayer's translation calls are made sentence by sentence, please be aware of concurrency and rate limits, as well as costs
+> Only tested a few models, but since Potplayer's translation calls are made sentence by sentence, please be aware of concurrency and rate limits, as well as **costs**
 
 ## References
 

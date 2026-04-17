@@ -1,4 +1,4 @@
-﻿# Potplayer Ollama 实时翻译插件
+# Potplayer Ollama 实时翻译插件
 
 这是一个为 Potplayer 开发的插件，可以使用 Ollama 或者其他自定义 API 进行实时字幕翻译。
 
@@ -26,6 +26,7 @@
   - [高级配置和 Debug](#高级配置和-debug)
   - [注意事项](#注意事项)
   - [更新](#更新)
+    - [V2.4 主要更新](#v24-主要更新)
     - [V2.3 主要更新](#v23-主要更新)
   - [TODO](#todo)
   - [关于项目](#关于项目)
@@ -37,7 +38,7 @@
     - [提示词模板](#提示词模板)
   - [性能表现](#性能表现)
     - [Ollama](#ollama)
-    - [外部 API](#外部-api)
+    - [云端 API](#云端-api)
   - [参考资料](#参考资料)
   - [许可证](#许可证)
 
@@ -52,7 +53,6 @@
    你也可以通过 `选项 → 扩展功能 → 实时字幕翻译` 打开该设置面板。
 5. 在实时字幕翻译设置中，将翻译引擎选择为 **Ollama Translate**。通常情况下，原始语言可保持为 `auto`，目标语言根据你的需求选择。
 6. 在账户设置中，将 **Model Name** 设置为你使用的模型名称。
-
    - 如果你使用的是 **Ollama Cloud** 模型，请填写对应的 **API Key**；
    - 如果是本地 Ollama 模型，则保持为空即可。
      点击确认后，确保状态提示为 **“可正常处理”**。
@@ -86,10 +86,18 @@
 - Ollama 本地用户请**请确保将模型和 ollama 更新到 >= 0.9.0 版本**
 - 请确保使用**支持多语言任务**的模型。
 - 根据翻译质量自行调整所用的提示词。
-- 通常来说，推理/思考（thinking）**应该关闭**，它会显著影响翻译速度，并且简单的翻译任务也不怎么需要推理。
-- 非常推荐使用**Instruct** 模型，如`qwen3:30b-a3b-instruct-2507-q4_K_M`，推荐模型可以参考[性能表现](#性能表现)部分。
+- 通常来说，推理/思考（thinking）**默认应该关闭**，它会显著影响翻译速度，并且简单的翻译任务也不怎么需要推理。
+- 非常推荐使用**Instruct** 模型，如`qwen3.5:27b`，推荐模型可以参考[性能表现](#性能表现)部分。
 
 ## 更新
+
+### V2.4 主要更新
+
+- 重构插件配置和 API 调用流程
+- 实现更丰富的上下文历史和上下文提示词模板，包含原文/译文/语言元数据
+- 仅在启用时注入上下文到用户/系统提示词
+- 重构登录流程为原生和自定义处理程序
+- 杂项：调整语言规范化、模板替换
 
 ### V2.3 主要更新
 
@@ -125,9 +133,9 @@
 
 ### 模型选择
 
-| 变量                 | 描述                                                                                                                |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `DEFAULT_MODEL_NAME` | 默认模型名称（默认值：`"qwen3-vl:30b-a3b-instruct-q4_K_M"`）。**如果没有在 Potplayer 设置中配置模型，将使用该模型** |
+| 变量                 | 描述                                                                                           |
+| -------------------- | ---------------------------------------------------------------------------------------------- |
+| `DEFAULT_MODEL_NAME` | 默认模型名称（默认值：`"qwen3.5:27b"`）。**如果没有在 Potplayer 设置中配置模型，将使用该模型** |
 
 ### 模型配置
 
@@ -151,14 +159,16 @@
 
 ### 上文历史
 
-| 变量           | 示例值 | 描述                       |
-| -------------- | ------ | -------------------------- |
-| `enabled`      | `true` | 是否使用上文历史进行翻译   |
-| `contextCount` | `5`    | 包含在上文中的最近句子数量 |
-| `maxSize`      | `10`   | 历史记录条目的最大数量     |
+| 变量             | 示例值 | 描述                                                   |
+| ---------------- | ------ | ------------------------------------------------------ |
+| `contextEnabled` | `true` | 是否使用上文历史进行翻译                               |
+| `contextCount`   | `5`    | 包含在上文中的最近句子数量                             |
+| `contextMaxSize` | `10`   | 历史记录条目的最大数量                                 |
+| `contextPrompt`  | 见下方 | 自定义上下文提示词模板（见下方 `CONTEXT_PROMPT_BASE`） |
 
+> 历史记录条目包含原文、译文和语言元数据，格式为：`[源语言] 原文 -> [目标语言] 译文`
 > 如果显著增加条目数量，由于上下文大小增加，响应时间也可能显著增加。还需要相应调整 token 数量。
-> 如果没有历史内容，用户提示词中的 `<Context>` 会被省略。
+> 仅当 `contextEnabled` 启用且 `contextPrompt` 非空时，上下文才会被注入到提示词中。
 
 ### 提示词模板
 
@@ -166,8 +176,9 @@
 
 - `{{from}}` 表示源语言
 - `{{to}}` 表示目标语言
-- `{{optional_reference_context}}` 表示可选的参考历史
+- `{{optional_reference_context}}` 表示可选的参考历史（仅当上下文历史启用且非空时才会填充）
 - `{{text_to_translate}}` 表示需要翻译的文本内容
+- `{{context_prompt}}` 表示上下文提示词模板（仅当上下文历史启用且 `contextPrompt` 非空时才会填充）
 
 <details>
 <summary>SYSTEM_PROMPT_BASE</summary>
@@ -204,9 +215,7 @@ const string SYSTEM_PROMPT_BASE =
 ```
 
 const string USER_PROMPT_BASE =
-"<Context>\n"
-"{{optional_reference_context}}\n"
-"</Context>\n"
+"{{context_prompt}}"
 "\n"
 "Translate ONLY the text inside <Text> into {{to}}.\n"
 "The context is for tone and continuity only and must NOT be translated.\n"
@@ -214,6 +223,23 @@ const string USER_PROMPT_BASE =
 "<Text>\n"
 "{{text_to_translate}}\n"
 "</Text>";
+
+```
+
+</details>
+<details>
+<summary>CONTEXT_PROMPT_BASE</summary>
+
+```
+
+const string CONTEXT_PROMPT_BASE =
+"The context below provides reference material from prior turns.\n"
+"Use it for tone, intent, and continuity only.\n"
+"Do NOT translate or quote the context.\n"
+"\n"
+"<Context>\n"
+"{{optional_reference_context}}\n"
+"</Context>";
 
 ```
 
@@ -322,31 +348,20 @@ You are a professional subtitle translator skilled in accurate and culturally ap
 
 > 意思是只要你的模型能在 ollama app 或 Ollama cli 里运行，插件就是支持的。
 
-**推荐**
+请测试你的 token/s，响应过慢的模型可能会导致翻译延迟或失败。根据你的硬件配置和需求进行配置，以确保最佳性能。
 
-- qwen3-vl:30b-a3b-instruct-q4_K_M
-- qwen3:30b-a3b-instruct-2507-q4_K_M
-- gpt-oss:20b
-- **qwen3-vl:8b-instruct**
-- ministral-3:14b-instruct-2512-q4_K_M
-- gemma3:12b/gemma3n:e4b
-- 对于配置不高的用户，可以考虑 qwen3:4b-instruct, qwen3-vl:4b-instruct
+### 云端 API
 
-> 请测试你的 token/s，响应过慢的模型可能会导致翻译延迟或失败。根据你的硬件配置和需求进行配置，以确保最佳性能。
+已测试平台：
 
-### 外部 API
+- Ollama Cloud
+- OpenRouter
+- Google Gemini
+- Z.Ai
+- DeepSeek
+- Minimax
 
-**推荐**
-
-- 免费
-  - GLM4.6V-flash - Z.AI
-  - gpt-oss-120b - OpenRouter
-  - MiMo-V2-Flash - OpenRouter
-  -
-- 付费
-  - Gemini 3 - Google
-
-> 仅测试了部分模型，但由于 Potplayer 的翻译调用是逐句进行的，请注意并行和速率限制，以及费用
+> 仅测试了部分模型，但由于 Potplayer 的翻译调用是逐句进行的，请注意并行和速率限制，以及**费用**
 
 ## 参考资料
 
