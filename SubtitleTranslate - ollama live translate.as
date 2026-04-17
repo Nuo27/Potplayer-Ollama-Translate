@@ -31,7 +31,7 @@ string GetPasswordText() {
 }
 
 void OnInitialize() {
-    // HostOpenConsole(); // Uncomment for debugging
+    // HostOpenConsole();
     HostPrintUTF8("Ollama translation plugin initialized\n");
 }
 
@@ -64,9 +64,7 @@ const string SYSTEM_PROMPT_BASE =
 "Follow the rules strictly, output PLAIN TEXT ONLY.";
 
 const string USER_PROMPT_BASE =
-"<Context>\n"
-"{{optional_reference_context}}\n"
-"</Context>\n"
+"{{context_prompt}}"
 "\n"
 "Translate ONLY the text inside <Text> into {{to}}.\n"
 "The context is for tone and continuity only and must NOT be translated.\n"
@@ -74,6 +72,15 @@ const string USER_PROMPT_BASE =
 "<Text>\n"
 "{{text_to_translate}}\n"
 "</Text>";
+
+const string CONTEXT_PROMPT_BASE =
+"The context below provides reference material from prior turns.\n"
+"Use it for tone, intent, and continuity only.\n"
+"Do NOT translate or quote the context.\n"
+"\n"
+"<Context>\n"
+"{{optional_reference_context}}\n"
+"</Context>";
 
 const string SYSTEM_PROMPT_LONG =
     "Role: Simultaneous Interpreter\n"
@@ -127,68 +134,65 @@ const string SYSTEM_PROMPT_LONG =
     "Initialization\n"
     "Follow all rules strictly and execute tasks exactly as defined.\n";
 
-    
 // ========================
-// GLOBAL CONFIGURATION
+// DEFAULT CONFIGURATION
 // ========================
-const string DEFAULT_MODEL_NAME = "qwen3-vl:30b-a3b-instruct-q4_K_M";
-
-string g_selectedModel = DEFAULT_MODEL_NAME;
-string g_customEndpoint = "";
-string userPrompt = USER_PROMPT_BASE;
-string systemPrompt = SYSTEM_PROMPT_BASE;
-bool g_isPluginActive = true;
+const string DEFAULT_MODEL_NAME = "qwen3.5:27b";
 
 // ========================
-// CONFIGURATION CLASSES
+// USER CONFIGURATION
 // ========================
-class ModelConfig {
-    float temperature = 0.5;
+class Config {
+    // Api
+    string modelName = DEFAULT_MODEL_NAME;
+    string apiKey = "";
+    string customEndpoint = "";
+    string baseUrl = "http://127.0.0.1:11434";
+    // Model
+    float temperature = 0.3;
     float topP = 0.9;
     int topK = 40;
     float minP = 0.1;
     float repeatPenalty = 1.1;
-    int maxTokens = 4096;
-
-    dictionary defaultParams;
-    void LoadDefaults(const dictionary &in params) { defaultParams = params; }
-
-    dictionary GetActiveParams() {
-        dictionary result;
-        if (defaultParams.exists("temperature")) result["temperature"] = temperature;
-        if (defaultParams.exists("top_p")) result["top_p"] = topP;
-        if (defaultParams.exists("top_k")) result["top_k"] = topK;
-        if (defaultParams.exists("min_p")) result["min_p"] = minP;
-        if (defaultParams.exists("repeat_penalty")) result["repeat_penalty"] = repeatPenalty;
-        if (defaultParams.exists("max_tokens")) result["max_tokens"] = maxTokens;
-        return result;
-    }
-}
-
-class ReasoningConfig {
+    int maxTokens = 2048;
+    // Reasoning
     bool enableThinking = false;
     string thinkStrength = "";
-    bool ollamaSupportsNativeThinking = false;
-    bool modelSupportsThinking = false;
+    // Context
+    bool contextEnabled = true;
+    int contextMaxSize = 10;
+    int contextCount = 5;
+    string contextPrompt = CONTEXT_PROMPT_BASE;
+
+    string systemPrompt = SYSTEM_PROMPT_BASE;
+    string userPrompt = USER_PROMPT_BASE;
 }
 
+// ========================
+// CONTEXT HISTORY
+// ========================
 class ContextHistory {
     array<string> history;
-    int maxSize = 10;
-    int contextCount = 5;
-    bool enabled = true;
 
-    void AddEntry(const string &in text) {
-        if (!enabled || text.empty()) return;
-        history.insertLast(text);
-        if (history.length() > uint(maxSize)) history.removeAt(0);
+    void AddEntry(const string &in source, const string &in translation,
+                  const string &in srcLang, const string &in dstLang) {
+        if (!g_config.contextEnabled || source.empty()) return;
+        string entry;
+        if (!srcLang.empty()) {
+            entry = "[" + srcLang + "] " + source + " -> [" + dstLang + "] " + translation;
+        } else {
+            entry = "[source] " + source + " -> [" + dstLang + "] " + translation;
+        }
+        history.insertLast(entry);
+        if (history.length() > uint(g_config.contextMaxSize)) {
+            history.removeAt(0);
+        }
     }
 
     string GetContext() {
-        if (!enabled || history.length() == 0) return "";
-
+        if (!g_config.contextEnabled || history.length() == 0) return "";
         string historyBlock = "";
-        int startIdx = max(0, int(history.length()) - contextCount);
+        int startIdx = max(0, int(history.length()) - g_config.contextCount);
         for (int i = startIdx; i < int(history.length()); ++i) {
             historyBlock += history[i] + "\n";
         }
@@ -197,23 +201,47 @@ class ContextHistory {
 }
 
 // ========================
-// OLLAMA API COMMUNICATION
+// API COMMUNICATION
 // ========================
-class OllamaAPI {
-    string baseUrl = "http://127.0.0.1:11434";
+class Api {
     string chatRoute = "/api/chat";
     string userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
     string contentType = "Content-Type: application/json";
-    string customEndpoint = "";
-
-    bool useOllamaNative = true;
-    bool useAPIKey = false;
-    string apiKey = "";
     string ollamaCloudUrl = "https://ollama.com";
+
+    dictionary defaultParams;
+    bool ollamaSupportsNativeThinking = false;
+    bool modelSupportsThinking = false;
     string modelArchitecture = "";
 
+    void LoadDefaults(const dictionary &in params) { defaultParams = params; }
+
+    dictionary GetActiveParams() {
+        dictionary result;
+        if (defaultParams.exists("temperature")) result["temperature"] = g_config.temperature;
+        if (defaultParams.exists("top_p")) result["top_p"] = g_config.topP;
+        if (defaultParams.exists("top_k")) result["top_k"] = g_config.topK;
+        if (defaultParams.exists("min_p")) result["min_p"] = g_config.minP;
+        if (defaultParams.exists("repeat_penalty")) result["repeat_penalty"] = g_config.repeatPenalty;
+        if (defaultParams.exists("max_tokens")) result["max_tokens"] = g_config.maxTokens;
+        return result;
+    }
+
+    string GetThinkOption() {
+        HostPrintUTF8("modelArchitecture: " + modelArchitecture + "\n");
+
+        if (modelArchitecture == "gpt-oss" && !g_config.enableThinking) return "\"low\"";
+        if (modelArchitecture != "gpt-oss") return g_config.enableThinking
+            ? (g_config.thinkStrength.empty() ? "true" : "\"" + g_config.thinkStrength + "\"")
+            : "false";
+
+        return "\"" + (g_config.enableThinking
+            ? (g_config.thinkStrength.empty() ? "true" : g_config.thinkStrength)
+            : "false") + "\"";
+    }
+
     array<string> GetAvailableModels() {
-        string response = HostUrlGetString(baseUrl + "/api/tags", userAgent, contentType, "");
+        string response = HostUrlGetString(g_config.baseUrl + "/api/tags", userAgent, contentType, "");
         if (response.empty()) return array<string>();
 
         JsonReader reader;
@@ -235,7 +263,7 @@ class OllamaAPI {
     }
 
     string GetModelInfo(const string &in modelName) {
-        string response = HostUrlGetString(baseUrl + "/api/show", userAgent, contentType, "{\"model\":\"" + modelName + "\"}");
+        string response = HostUrlGetString(g_config.baseUrl + "/api/show", userAgent, contentType, "{\"model\":\"" + modelName + "\"}");
         if (response.empty()) return "";
 
         JsonReader reader;
@@ -246,7 +274,7 @@ class OllamaAPI {
     }
 
     string GetVersion() {
-        string response = HostUrlGetString(baseUrl + "/api/version", userAgent, contentType, "");
+        string response = HostUrlGetString(g_config.baseUrl + "/api/version", userAgent, contentType, "");
         if (response.empty()) return "";
 
         JsonReader reader;
@@ -256,7 +284,7 @@ class OllamaAPI {
     }
 
     array<string> GetOpenAIModels() {
-        string base = customEndpoint;
+        string base = g_config.customEndpoint;
         int chatPos = base.find("/chat/completions");
         int v1Pos = base.find("/v1/");
         if (chatPos != -1) base = base.substr(0, chatPos);
@@ -269,7 +297,7 @@ class OllamaAPI {
 
         string header = BuildHeader();
         string headerLog = header;
-        if (!apiKey.empty()) headerLog.replace(apiKey, "***");
+        if (!g_config.apiKey.empty()) headerLog.replace(g_config.apiKey, "***");
         HostPrintUTF8("Models list request url   : " + url + "\n");
         HostPrintUTF8("Models list request header: " + headerLog + "\n");
 
@@ -316,52 +344,36 @@ class OllamaAPI {
     }
 
     string BuildTranslationRequest(const string &in text, const string &in srcLang, const string &in dstLang) {
-        string context = g_contextHistory.enabled ? g_contextHistory.GetContext() : "";
-        string sysContent = ApplyTemplate(systemPrompt, text, srcLang, dstLang, context);
-        string userContent = ApplyTemplate(userPrompt, text, srcLang, dstLang, context);
+        string context = g_config.contextEnabled ? g_contextHistory.GetContext() : "";
+        string sysContent = ApplyTemplate(g_config.systemPrompt, text, srcLang, dstLang, context);
+        string userContent = ApplyTemplate(g_config.userPrompt, text, srcLang, dstLang, context);
         string escapedSystem = EscapeJsonString(sysContent);
         string escapedUser = EscapeJsonString(userContent);
 
         string messages = "[{\"role\":\"system\",\"content\":\"" + escapedSystem + "\"},"
             + "{\"role\":\"user\",\"content\":\"" + escapedUser + "\"}]";
 
-        string requestData = "{\"model\":\"" + g_selectedModel + "\",\"messages\":" + messages;
+        string requestData = "{\"model\":\"" + g_config.modelName + "\",\"messages\":" + messages;
         requestData += BuildOptions();
-        if (g_reasoningConfig.ollamaSupportsNativeThinking) requestData += ",\"think\":" + GetThinkOption();
+        if (ollamaSupportsNativeThinking) requestData += ",\"think\":" + GetThinkOption();
         requestData += ",\"stream\":false}";
         return requestData;
     }
 
-    string GetThinkOption() {
-        HostPrintUTF8("modelArchitecture: " + modelArchitecture + "\n");
-
-        if (modelArchitecture == "gpt-oss" && !g_reasoningConfig.enableThinking) return "\"low\"";
-        if (modelArchitecture != "gpt-oss") return g_reasoningConfig.enableThinking
-            ? (g_reasoningConfig.thinkStrength.empty() ? "true" : "\"" + g_reasoningConfig.thinkStrength + "\"")
-            : "false";
-
-        return "\"" + (g_reasoningConfig.enableThinking
-            ? (g_reasoningConfig.thinkStrength.empty() ? "true" : g_reasoningConfig.thinkStrength)
-            : "false") + "\"";
-    }
     string BuildUrl() {
-        if (!customEndpoint.empty()) {
-            useOllamaNative = false;
-            return customEndpoint;
-        }
-        if (useAPIKey) return ollamaCloudUrl + chatRoute;
-        if (useOllamaNative) return baseUrl + chatRoute;
-        return baseUrl + "/v1/chat/completions";
+        if (!g_config.customEndpoint.empty()) return g_config.customEndpoint;
+        if (!g_config.apiKey.empty()) return ollamaCloudUrl + chatRoute;
+        return g_config.baseUrl + chatRoute;
     }
 
     string BuildHeader() {
         string header = contentType + "\nAccept: application/json";
-        if (!apiKey.empty()) header += "\nAuthorization: Bearer " + apiKey;
+        if (!g_config.apiKey.empty()) header += "\nAuthorization: Bearer " + g_config.apiKey;
         return header;
     }
 
     string BuildOptions() {
-        dictionary params = g_modelConfig.GetActiveParams();
+        dictionary params = GetActiveParams();
         if (params.getSize() == 0) return "";
 
         string json = ",\"options\":{";
@@ -390,7 +402,7 @@ class OllamaAPI {
                     string line = TrimString(lines[i]);
                     if (!line.empty()) result += "  " + line + "\n";
                 }
-                g_modelConfig.LoadDefaults(ParseParameterString(params));
+                LoadDefaults(ParseParameterString(params));
             }
         }
 
@@ -412,7 +424,7 @@ class OllamaAPI {
             JsonValue capabilities = root["capabilities"];
             array<string> caps;
             for (int i = 0; i < capabilities.size(); i++) if (capabilities[i].isString()) caps.insertLast(capabilities[i].asString());
-            g_reasoningConfig.modelSupportsThinking = caps.find("thinking") != -1;
+            modelSupportsThinking = caps.find("thinking") != -1;
         }
 
         return result;
@@ -467,24 +479,23 @@ class OllamaAPI {
 // ========================
 // GLOBAL INSTANCES
 // ========================
-ModelConfig g_modelConfig;
-ReasoningConfig g_reasoningConfig;
+Config g_config;
 ContextHistory g_contextHistory;
-OllamaAPI g_ollama_api;
+Api g_api;
+bool g_isPluginActive = true;
 
 // ========================
 // USER CONFIG & AUTH
 // ========================
 void LoadUserConfig() {
-    g_selectedModel = HostLoadString("selected_model_ollama");
-    HostPrintUTF8("Loaded model: " + g_selectedModel + "\n");
+    g_config.modelName = HostLoadString("selected_model_ollama");
+    HostPrintUTF8("Loaded model: " + g_config.modelName + "\n");
 
-    g_ollama_api.apiKey = HostLoadString("api_key_ollama");
-    HostPrintUTF8("Loaded API Key: " + g_ollama_api.apiKey + "\n");
-    g_customEndpoint = HostLoadString("custom_endpoint_ollama");
-    g_ollama_api.customEndpoint = g_customEndpoint;
-    if (!g_customEndpoint.empty()) {
-        HostPrintUTF8("Loaded custom endpoint: " + g_customEndpoint + "\n");
+    g_config.apiKey = HostLoadString("api_key_ollama");
+    HostPrintUTF8("Loaded API Key: " + g_config.apiKey + "\n");
+    g_config.customEndpoint = HostLoadString("custom_endpoint_ollama");
+    if (!g_config.customEndpoint.empty()) {
+        HostPrintUTF8("Loaded custom endpoint: " + g_config.customEndpoint + "\n");
     }
 }
 
@@ -493,7 +504,7 @@ bool TrySelectModelFromList(const array<string> &in availableModels, const strin
     for (uint i = 0; i < availableModels.length(); i++) {
         string availableLower = availableModels[i]; availableLower.MakeLower();
         if (selectedLower == availableLower) {
-            g_selectedModel = availableModels[i];
+            g_config.modelName = availableModels[i];
             return true;
         }
     }
@@ -502,13 +513,12 @@ bool TrySelectModelFromList(const array<string> &in availableModels, const strin
 
 bool IsModelValid(const string &in modelName) {
     array<string> availableModels;
-    if (g_ollama_api.customEndpoint.empty()) {
-        availableModels = g_ollama_api.GetAvailableModels();
+    if (g_config.customEndpoint.empty()) {
+        availableModels = g_api.GetAvailableModels();
     } else {
-        // full endpoint, skip validation
-        if (g_ollama_api.customEndpoint.find("/v1/") != -1
-            || g_ollama_api.customEndpoint.find("/chat/completions") != -1) return true;
-        availableModels = g_ollama_api.GetOpenAIModels();
+        if (g_config.customEndpoint.find("/v1/") != -1
+            || g_config.customEndpoint.find("/chat/completions") != -1) return true;
+        availableModels = g_api.GetOpenAIModels();
     }
     if (availableModels.length() == 0) return false;
 
@@ -521,103 +531,151 @@ bool IsModelValid(const string &in modelName) {
 }
 
 // ========================
-// Plugin Lifecycle
+// LOGIN FLOW
 // ========================
+void ParseLoginInput(string User, string Pass) {
+    g_config.modelName = TrimString(User);
+    if (g_config.modelName.empty()) g_config.modelName = DEFAULT_MODEL_NAME;
 
-string ServerLogin(string User, string Pass) {
-    g_selectedModel = TrimString(User);
-    if (g_selectedModel.empty()) g_selectedModel = DEFAULT_MODEL_NAME;
+    string newApiKey = TrimString(Pass);
+    if (!newApiKey.empty()) {
+        g_config.apiKey = newApiKey;
+    }
+}
 
-    g_ollama_api.apiKey = TrimString(Pass);
-    g_ollama_api.useAPIKey = !g_ollama_api.apiKey.empty();
-    g_ollama_api.customEndpoint = g_customEndpoint; // custom endpoint must be edited in the file/settings
+string LoginNativeOllama() {
+    array<string> availableModels = g_api.GetAvailableModels();
+    if (availableModels.length() == 0) {
+        ShowError("Unable to connect to Ollama. Please ensure Ollama is running and has models available.", "Login Failed");
+        return "500 Unable to connect to Ollama. Please ensure Ollama is running and has models available.";
+    }
 
-    if (g_ollama_api.customEndpoint.empty()) {
-        array<string> availableModels = g_ollama_api.GetAvailableModels();
+    bool valid = IsModelValid(g_config.modelName);
+    HostPrintUTF8("Is " + g_config.modelName + " valid: " + (valid ? "true" : "false") + "\n");
+    if (!valid) {
+        return HandleModelNotFound();
+    }
+    return "";
+}
+
+string LoginCustomEndpoint() {
+    if (!IsValidCustomEndpoint(g_config.customEndpoint)) {
+        g_isPluginActive = false;
+        return "400 Invalid custom endpoint.";
+    }
+    if (g_config.apiKey.empty()) {
+        ShowError("API key is required for custom endpoint.\nEndpoint: " + g_config.customEndpoint, "Login Failed");
+        return "401 API key required for custom endpoint.";
+    }
+
+    bool openAIEndpoint = g_config.customEndpoint.find("/v1/chat/completions") != -1;
+    if (openAIEndpoint) {
+        array<string> availableModels = g_api.GetOpenAIModels();
         if (availableModels.length() == 0) {
-            ShowError("Unable to connect to Ollama. Please ensure Ollama is running and has models available.", "Login Failed");
-            return "500 Unable to connect to Ollama. Please ensure Ollama is running and has models available.";
+            ShowError("Unable to connect to custom endpoint or fetch models.\nEndpoint: " + g_config.customEndpoint, "Login Failed");
+            return "500 Unable to connect to custom endpoint or fetch models.";
         }
-
-        bool valid = IsModelValid(g_selectedModel);
-        HostPrintUTF8("Is " + g_selectedModel + " valid: " + (valid ? "true" : "false") + "\n");
+        LogModelList(availableModels);
+        bool valid = TrySelectModelFromList(availableModels, g_config.modelName);
+        HostPrintUTF8("Is " + g_config.modelName + " valid: " + (valid ? "true" : "false") + "\n");
         if (!valid) {
             return HandleModelNotFound();
         }
+        HostPrintUTF8("Using custom OpenAI endpoint: " + g_config.customEndpoint + "\n");
     } else {
-        if (!IsValidCustomEndpoint(g_ollama_api.customEndpoint)) {
-            g_isPluginActive = false;
-            return "400 Invalid custom endpoint.";
-        }
-        if (g_ollama_api.apiKey.empty()) {
-            ShowError("API key is required for custom endpoint.\nEndpoint: " + g_ollama_api.customEndpoint, "Login Failed");
-            return "401 API key required for custom endpoint.";
-        }
-        bool openAIEndpoint = g_ollama_api.customEndpoint.find("/v1/chat/completions") != -1;
-        if (openAIEndpoint) {
-            array<string> availableModels = g_ollama_api.GetOpenAIModels();
-            if (availableModels.length() == 0) {
-                ShowError("Unable to connect to custom endpoint or fetch models.\nEndpoint: " + g_ollama_api.customEndpoint, "Login Failed");
-                return "500 Unable to connect to custom endpoint or fetch models.";
-            }
-            LogModelList(availableModels);
-            bool valid = TrySelectModelFromList(availableModels, g_selectedModel);
-            HostPrintUTF8("Is " + g_selectedModel + " valid: " + (valid ? "true" : "false") + "\n");
-            if (!valid) {
-                return HandleModelNotFound();
-            }
-            HostPrintUTF8("Using custom OpenAI endpoint: " + g_ollama_api.customEndpoint + "\n");
-        } else {
-            HostPrintUTF8("Using custom endpoint (skipping model validation): " + g_ollama_api.customEndpoint + "\n");
-        }
+        HostPrintUTF8("Using custom endpoint (skipping model validation): " + g_config.customEndpoint + "\n");
     }
+    return "";
+}
 
-    g_reasoningConfig.ollamaSupportsNativeThinking = g_ollama_api.customEndpoint.empty()
-        ? g_ollama_api.SupportsNativeThinking()
+void DetectThinkingSupport() {
+    g_api.ollamaSupportsNativeThinking = g_config.customEndpoint.empty()
+        ? g_api.SupportsNativeThinking()
         : false;
+}
 
-    if (g_ollama_api.customEndpoint.empty()) {
-        string modelInfo = g_ollama_api.GetModelInfo(g_selectedModel);
+string FetchAndApplyModelInfo() {
+    if (g_config.customEndpoint.empty()) {
+        string modelInfo = g_api.GetModelInfo(g_config.modelName);
         if (modelInfo.empty()) {
             HostPrintUTF8("Warning: Could not retrieve model information\n");
-            ShowError("Unable to retrieve model information for " + g_selectedModel, "Login Warning");
+            ShowError("Unable to retrieve model information for " + g_config.modelName, "Login Warning");
             return "500 Unable to retrieve model information.";
         }
         HostPrintUTF8("Model information retrieved successfully\n" + modelInfo);
     } else {
         HostPrintUTF8("Skipping model info fetch for custom endpoint\n");
     }
+    return "";
+}
 
+void SaveLoginConfig() {
+    HostSaveString("selected_model_ollama", g_config.modelName);
+    HostSaveString("custom_endpoint_ollama", g_config.customEndpoint);
+    HostSaveString("api_key_ollama", g_config.apiKey);
+}
 
-    HostSaveString("selected_model_ollama", g_selectedModel);
-    HostSaveString("custom_endpoint_ollama", g_ollama_api.customEndpoint);
-    g_ollama_api.useAPIKey = !g_ollama_api.apiKey.empty();
-    HostSaveString("api_key_ollama", g_ollama_api.apiKey);
+void RunLoginTest() {
+    string testSrcLang = "en";
+    string testDstLang = "zh-CN";
+    string testText = "Hello";
+
+    HostPrintUTF8("Running login test translation: " + testSrcLang + " -> " + testDstLang + "\n");
+
+    string requestData = g_api.BuildTranslationRequest(testText, testSrcLang, testDstLang);
+    string response = g_api.SendTranslationRequest(requestData);
+
+    if (response.empty()) {
+        HostPrintUTF8("Login test: translation request failed - no response\n");
+        ShowError("Login test translation failed - no response.\nThe plugin is configured but translation may not work.", "Login Test Warning");
+        return;
+    }
+
+    string translatedText = ExtractTranslatedText(response);
+    translatedText = RemoveThinkingTags(translatedText);
+    translatedText = TrimString(translatedText);
+
+    if (translatedText.empty()) {
+        HostPrintUTF8("Login test: translation returned empty result\n");
+        ShowError("Login test translation returned empty result.\nThe plugin is configured but translation may not work.", "Login Test Warning");
+        return;
+    }
+
+    HostPrintUTF8("Login test completed successfully!\n");
+    HostPrintUTF8("  " + testSrcLang + " -> " + testDstLang + "\n");
+    HostPrintUTF8("  Input: " + testText + "\n");
+    HostPrintUTF8("  Output: " + translatedText + "\n");
+}
+
+string ServerLogin(string User, string Pass) {
+    ParseLoginInput(User, Pass);
+
+    string error;
+    if (g_config.customEndpoint.empty()) {
+        error = LoginNativeOllama();
+    } else {
+        error = LoginCustomEndpoint();
+    }
+    if (!error.empty()) return error;
+
+    DetectThinkingSupport();
+
+    error = FetchAndApplyModelInfo();
+    if (!error.empty()) return error;
+
+    SaveLoginConfig();
 
     g_isPluginActive = true;
     HostPrintUTF8("Successfully configured Ollama translation plugin\n");
-    HostPrintUTF8("Native thinking support: " + (g_reasoningConfig.ollamaSupportsNativeThinking ? "Yes" : "No") + "\n");
-    LoadUserConfig();
-    
-    // string test_srcLang = "auto";
-    // string test_dstLang = "jp";
-    // string test_text = "Why is the sky blue?";
-    // string translated_text = Translate(test_text, test_srcLang, test_dstLang);
-    
-    // if(!translated_text.empty() && translated_text != "") {
-    //     HostPrintUTF8("Translation task completed successfully!\n" + test_srcLang + " -> " + test_dstLang + "\n"+ "Test Text: " + test_text + "\n" + "Translated Text: " + translated_text + "\n" );
-    // }
-    // else {
-    //     HostPrintUTF8("Translation task failed. Please check the settings");
-    //     return "Translation task failed. Please check the settings";
-    // }
+    HostPrintUTF8("Native thinking support: " + (g_api.ollamaSupportsNativeThinking ? "Yes" : "No") + "\n");
+    RunLoginTest();
 
     return "200 ok";
 }
 
 void ServerLogout() {
-    HostSaveString("selected_model_ollama", g_selectedModel);
-    HostSaveString("custom_endpoint_ollama", g_ollama_api.customEndpoint);
+    HostSaveString("selected_model_ollama", g_config.modelName);
+    HostSaveString("custom_endpoint_ollama", g_config.customEndpoint);
     HostSaveString("api_key_ollama", "");
     HostPrintUTF8("Successfully logged out from Ollama translation plugin\n");
 }
@@ -626,7 +684,7 @@ void ServerLogout() {
 // LANGUAGES
 // ========================
 array<string> g_supportedLanguages = {
-    "Auto", "af", "sq", "am", "ar", "hy", "az", "eu", "be", "bn", "bs", "bg", "ca",
+    "", "af", "sq", "am", "ar", "hy", "az", "eu", "be", "bn", "bs", "bg", "ca",
     "ceb", "ny", "zh-CN", "zh-TW", "co", "hr", "cs", "da", "nl", "en", "eo", "et",
     "tl", "fi", "fr", "fy", "gl", "ka", "de", "el", "gu", "ht", "ha", "haw", "he",
     "hi", "hmn", "hu", "is", "ig", "id", "ga", "it", "ja", "jw", "kn", "kk", "km",
@@ -653,10 +711,9 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
     }
 
     string srcLangCode = NormalizeLanguage(SrcLang);
-    string requestData = g_ollama_api.BuildTranslationRequest(Text, srcLangCode, DstLang);
+    string requestData = g_api.BuildTranslationRequest(Text, srcLangCode, DstLang);
 
-    g_contextHistory.AddEntry(Text);
-    string response = g_ollama_api.SendTranslationRequest(requestData);
+    string response = g_api.SendTranslationRequest(requestData);
     if (response.empty()) {
         HostPrintUTF8("Translation request failed - no response\n");
         ShowError("Translation request failed - no response", "Translation Failed");
@@ -667,6 +724,8 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
     translatedText = RemoveThinkingTags(translatedText);
     translatedText = TrimString(translatedText);
     if (DstLang == "fa" || DstLang == "ar" || DstLang == "he") translatedText = "\u202B" + translatedText;
+
+    g_contextHistory.AddEntry(Text, translatedText, srcLangCode, DstLang);
 
     SrcLang = "UTF8";
     DstLang = "UTF8";
@@ -683,7 +742,7 @@ string ExtractTranslatedText(const string response) {
 
     HostPrintUTF8("response: " + response + "\n");
 
-    JsonValue message = g_ollama_api.useOllamaNative ? root["message"] : root["choices"][0]["message"];
+    JsonValue message = g_config.customEndpoint.empty() ? root["message"] : root["choices"][0]["message"];
     if (!message.isObject()) {
         HostPrintUTF8("Invalid response format - no message\n");
         return "";
@@ -703,11 +762,17 @@ string ExtractTranslatedText(const string response) {
 // ========================
 
 bool IsTargetLanguageValid(const string &in dst) {
-    return !(dst.empty() || dst == "auto");
+    if (dst.empty()) return false;
+    string lower = dst;
+    lower.MakeLower();
+    return lower != "auto";
 }
 
 string NormalizeLanguage(const string &in lang) {
-    if (lang.empty() || lang == "auto") return "";
+    if (lang.empty()) return "";
+    string lower = lang;
+    lower.MakeLower();
+    if (lower == "auto") return "";
     return lang;
 }
 
@@ -716,7 +781,7 @@ void ShowError(const string &in message, const string &in title = "Error") {
 }
 
 string HandleModelNotFound() {
-    ShowError("Model not found: " + g_selectedModel, "Login Failed");
+    ShowError("Model not found: " + g_config.modelName, "Login Failed");
     g_isPluginActive = false;
     return "";
 }
@@ -787,10 +852,10 @@ string RemoveThinkingTags(const string &in text) {
     string result = text;
     int startPos = 0;
     while (true) {
-        int openPos = result.find("<think>", startPos);
+        int openPos = result.find("<think", startPos);
         if (openPos == -1) break;
 
-        int closePos = result.find("</think>", openPos);
+        int closePos = result.find("</think", openPos);
         if (closePos == -1) break;
 
         result = result.substr(0, openPos) + result.substr(closePos + 8);
@@ -822,19 +887,23 @@ string ApplyTemplate(const string &in tmpl, const string &in text, const string 
     string fromVal = from;
     fromVal.MakeLower();
     bool includeFrom = !(fromVal.empty() || fromVal == "auto");
-    bool hasContext = !TrimString(context).empty();
 
     result.replace("{{text}}", text);
     result.replace("{{text_to_translate}}", text);
     result.replace("{{from}}", includeFrom ? from : "");
     result.replace("{{to}}", to);
     result.replace("{{context}}", context);
-    result.replace("{{optional_reference_context}}", context);
-    if (!hasContext) {
-        result.replace("<Context>\n\n</Context>\n\n", "");
+
+    if (g_config.contextEnabled && !TrimString(g_config.contextPrompt).empty() && !TrimString(context).empty()) {
+        result.replace("{{context_prompt}}", g_config.contextPrompt);
+        result.replace("{{optional_reference_context}}", context);
+    } else {
+        result.replace("{{context_prompt}}\n\n", "");
+        result.replace("{{context_prompt}}\n", "");
+        result.replace("{{context_prompt}}", "");
     }
+
     if (!includeFrom) {
-        // soften leftover phrasing when from was empty/auto
         result.replace(" from  to", " to");
         result.replace("from  to", "to");
         result.replace(" from  ", " ");
