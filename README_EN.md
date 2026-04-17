@@ -100,6 +100,7 @@ Tested under Ollama 0.20.8-rc0
 
 ### V2.4 Major Updates
 
+- Rewrite SYSTEM_PROMPT_BASE to a clearer, sectioned real-time interpreter prompt
 - Refactored plugin configuration and API layer
 - Implemented richer context history and context prompt templates with source/translation/lang metadata
 - Context is only injected into user/system prompts when enabled
