@@ -25,9 +25,10 @@
   - [安装插件](#安装插件)
   - [高级配置和 Debug](#高级配置和-debug)
   - [注意事项](#注意事项)
-  - [更新](#更新)
-    - [V2.4 主要更新](#v24-主要更新)
-    - [V2.3 主要更新](#v23-主要更新)
+   - [更新](#更新)
+     - [V3.0 主要更新](#v30-主要更新)
+     - [V2.4 主要更新](#v24-主要更新)
+     - [V2.3 主要更新](#v23-主要更新)
   - [TODO](#todo)
   - [关于项目](#关于项目)
   - [自定义配置](#自定义配置)
@@ -90,6 +91,22 @@
 - 非常推荐使用**Instruct** 模型，如`qwen3.5:27b`，推荐模型可以参考[性能表现](#性能表现)部分。
 
 ## 更新
+
+### V3.0 主要更新
+
+架构级重写，分阶段推进。本阶段为 **Phase 1：基础重构与关键 Bug 修复**。
+
+- 引入 `Logger` 类，统一日志出口，**自动脱敏 API Key**（修复 API Key 明文写入日志的安全问题）
+- 日志分级：`Info / Warn / Error / Debug`，Debug 由 `g_logger.debug` 开关控制
+- 移除死代码：`SYSTEM_PROMPT_LONG`（50 行未引用常量）、`RunLoginTest`（已注释函数）
+- 移除 `DEFAULT_MODEL_NAME` 常量及其 fallback 逻辑（与 Q6 决策一致）
+- 移除 `ApplyTemplate` 中的 `from  to` / `while "  "` hack（修复误改用户 prompt 模板的数据损坏 bug）
+- 移除 `{{text}}` 别名变量（与 `{{text_to_translate}}` 重复，统一用后者）
+- 新增 `Config.Load()/Save()` 方法集中管理配置读写
+- 新增 `SelfTest()` 启动自检（纯函数 invariant 验证）
+- 修复版本号不一致（`GetVersion()` 现返回 `"3.0"`，与文档/标签对齐）
+
+> Phase 2–4 将分别处理：稳定性与并发、Provider 分裂与新 Prompt 体系、缓存系统。
 
 ### V2.4 主要更新
 
