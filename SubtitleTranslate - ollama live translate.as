@@ -20,9 +20,9 @@ class Logger {
 
     string Redact(const string &in m) {
         if (redactKey.empty()) return m;
-        string out = m;
-        out.replace(redactKey, "***");
-        return out;
+        string result = m;
+        result.replace(redactKey, "***");
+        return result;
     }
 }
 
