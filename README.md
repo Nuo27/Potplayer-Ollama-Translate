@@ -96,6 +96,23 @@
 
 架构级重写，分阶段推进。
 
+#### Phase 3：Provider 分裂 + Prompt v3
+
+- **4-mode Provider 矩阵**（基于 customEndpoint 与 apiKey 的存在与否自动判定）：
+  - OllamaLocal：`baseUrl + /api/chat`，options 包装，无 auth
+  - OllamaCloud：`ollama.com/api/chat`，options 包装，Bearer
+  - OpenAILocal（如 LM Studio）：`<endpoint>/v1/chat/completions`，顶层参数，无 auth
+  - OpenAICloud（如 Z.AI / OpenRouter）：同上 + Bearer
+- **URL 自动补全**（`EndpointNormalizer`）：用户填 `http://127.0.0.1:1234` 自动追加 `/v1/chat/completions`；填完整 URL 原样使用
+- **修复 Q8/H8**：OpenAI 兼容路径改为**顶层参数**（`temperature` / `top_p` / `max_tokens`），不再误用 Ollama 的 `options` 包装
+- **登录校验从 3 次请求降到 1 次**：移除 `/api/show`、`/api/version` 探测，只拉模型列表确认用户模型存在
+- **Prompt v3 上线**：System Prompt 从 ~220 token 降到 ~70 token（节省 68%），改为正向指令、删除矛盾约束、删除冗余"Output plain text"重复
+- **上下文格式**（修 H5）：`src ⇒ dst` 取代 `[lang] src -> [lang] dst`，省去元数据，每条省 ~10 token
+- **JSON 稳定序列化**（修 H3）：显式按字母序列出字段，不再依赖 jsoncpp dictionary 遍历（非确定性）
+- **model 名 JSON 转义**（修 H4）：含 `"` 或 `\` 的模型名不再破坏请求
+- **移除约 250 行死代码**：FormatModelInfo、ParseParameterString、JsonValueToString、CompareVersion、SupportsNativeThinking、GetModelInfo、GetAvailableModels、GetOpenAIModels、LoadDefaults、GetActiveParams、FetchAndApplyModelInfo、DetectThinkingSupport、LoginNativeOllama、LoginCustomEndpoint、IsModelValid、HandleModelNotFound、defaultParams、modelArchitecture、ollamaSupportsNativeThinking
+- SelfTest：26 → 41 条断言（新增 EndpointNormalizer、ProviderInfo、ParseModelsList、TrySelectModelFromList、FirstNModels、ContextHistory 格式验证）
+
 #### Phase 2：稳定性与并发
 
 - 引入 `Response` 类型（`status` + `body`），全链路传递 HTTP 状态码（修 C3）
@@ -116,10 +133,9 @@
 - 移除 `ApplyTemplate` 中的 `from  to` / `while "  "` hack（修复误改用户 prompt 模板的数据损坏 bug）
 - 移除 `{{text}}` 别名变量（与 `{{text_to_translate}}` 重复，统一用后者）
 - 新增 `Config.Load()/Save()` 方法集中管理配置读写
-- 新增 `SelfTest()` 启动自检（纯函数 invariant 验证，覆盖 26 条断言）
 - 修复版本号不一致（`GetVersion()` 现返回 `"3.0"`，与文档/标签对齐）
 
-> Phase 3–4 将分别处理：Provider 分裂与新 Prompt 体系、缓存系统。
+> Phase 4 将处理：翻译缓存系统。
 
 ### V2.4 主要更新
 

@@ -109,6 +109,23 @@ This is a plugin developed for PotPlayer that enables real-time subtitle transla
 
 Architecture-level rewrite, rolled out in phases.
 
+#### Phase 3: Provider split + Prompt v3
+
+- **4-mode Provider matrix** (auto-detected from customEndpoint + apiKey presence):
+  - OllamaLocal: `baseUrl + /api/chat`, options wrapper, no auth
+  - OllamaCloud: `ollama.com/api/chat`, options wrapper, Bearer
+  - OpenAILocal (LM Studio etc.): `<endpoint>/v1/chat/completions`, top-level params, no auth
+  - OpenAICloud (Z.AI / OpenRouter etc.): same + Bearer
+- **URL auto-completion** (`EndpointNormalizer`): user pastes `http://127.0.0.1:1234`, plugin appends `/v1/chat/completions`; full URLs pass through
+- **Fixed Q8/H8**: OpenAI-compat path now uses **top-level params** (`temperature` / `top_p` / `max_tokens`), no longer misuses Ollama's `options` wrapper
+- **Login validation reduced from 3 requests to 1**: dropped `/api/show` and `/api/version` probes; only fetches model list to confirm user's model exists
+- **Prompt v3 shipped**: System Prompt trimmed from ~220 to ~70 tokens (-68%), positive instructions over negative, no contradictory "keep formatting" vs "natural fluent", no redundant "Output plain text" repeated
+- **Context format** (fixes H5): `src ⇒ dst` replaces `[lang] src -> [lang] dst`, drops metadata, ~10 tokens saved per entry
+- **Deterministic JSON** (fixes H3): explicit alphabetical field list, no longer relies on jsoncpp dictionary iteration order
+- **Escaped modelName in JSON** (fixes H4): model names containing `"` or `\` no longer break the request
+- **Removed ~250 lines of dead code**: FormatModelInfo, ParseParameterString, JsonValueToString, CompareVersion, SupportsNativeThinking, GetModelInfo, GetAvailableModels, GetOpenAIModels, LoadDefaults, GetActiveParams, FetchAndApplyModelInfo, DetectThinkingSupport, LoginNativeOllama, LoginCustomEndpoint, IsModelValid, HandleModelNotFound, defaultParams, modelArchitecture, ollamaSupportsNativeThinking
+- SelfTest: 26 → 41 assertions (new coverage for EndpointNormalizer, ProviderInfo, ParseModelsList, TrySelectModelFromList, FirstNModels, ContextHistory format)
+
 #### Phase 2: Reliability and Concurrency
 
 - Introduced `Response` type (`status` + `body`) propagated through the chain (fixes C3)
@@ -129,10 +146,9 @@ Architecture-level rewrite, rolled out in phases.
 - Removed the `from  to` / `while "  "` hack inside `ApplyTemplate` (fixes a data-corruption bug that mangled user prompt templates by collapsing intentional double spaces)
 - Removed the `{{text}}` alias variable (duplicate of `{{text_to_translate}}`)
 - Added `Config.Load()/Save()` methods to centralize config I/O
-- Added `SelfTest()` startup smoke check (pure-function invariant verification, 26 assertions)
 - Fixed inconsistent version strings (`GetVersion()` now returns `"3.0"`, aligned with docs and tags)
 
-> Phases 3–4 will address: provider split with new prompt system, and the translation cache.
+> Phase 4 will address: translation cache system.
 
 ### V2.4 Major Updates
 

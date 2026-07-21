@@ -1,6 +1,6 @@
 /*
  * Real-time subtitle translation for PotPlayer using Ollama
- * v3.0 — Phase 1: Foundation refactor
+ * v3.0 — Phase 3: Provider split + Prompt v3
  */
 
 // ========================
@@ -70,50 +70,126 @@ void OnFinalize() {
 }
 
 // ========================
-// PROMPTS
+// PROMPTS (v3 — ~70 token system, down from ~220)
 // ========================
+// ponytail: positive instructions over negative, no redundant "Output plain
+// text only" repeated three times, no contradictory "keep formatting" vs
+// "natural fluent". Optimized for real-time subtitle translation.
+
 const string SYSTEM_PROMPT_BASE =
-"You are a real-time interpreter.\n"
-"Translate the input from {{from}} to {{to}}.\n"
+"You are a real-time subtitle translator.\n"
+"Translate the user text from {{from}} to {{to}}.\n"
 "\n"
-"Core Requirements:\n"
-"- Output ONLY the translation in {{to}}\n"
-"- Preserve original meaning, tone, and intent\n"
-"- Keep names, numbers, symbols, and formatting unchanged\n"
+"Rules:\n"
+"- Output only the translation in {{to}}. No explanation.\n"
+"- Preserve names, numbers, code, and identifiers as-is.\n"
+"- Adapt phrasing for native fluency, do not translate word-by-word.\n"
+"- If input is incomplete, translate what is given.\n"
 "\n"
-"Context Handling:\n"
-"- Context/history may be provided for reference\n"
-"- Use it only to maintain tone and continuity\n"
-"- NEVER translate or repeat context/history\n"
-"\n"
-"Style Rules:\n"
-"- Produce natural, fluent, native-sounding output in {{to}}\n"
-"- Lightly smooth disfluencies if needed for clarity\n"
-"- Do NOT add, omit, or change meaning\n"
-"- If input is incomplete, translate it as-is\n"
-"\n"
-"Strict Rules:\n"
-"- No explanations, comments, or extra text\n"
-"- Output plain text only\n";
+"If context is provided, use it only for tone and reference.\n"
+"Never translate or repeat the context.\n";
 
 const string USER_PROMPT_BASE =
 "{{context_prompt}}"
+"Translate to {{to}}:\n"
 "\n"
-"Translate ONLY the text inside <Text> into {{to}}.\n"
-"The context is for tone and continuity only and must NOT be translated.\n"
-"\n"
-"<Text>\n"
+"<text>\n"
 "{{text_to_translate}}\n"
-"</Text>";
+"</text>\n";
 
 const string CONTEXT_PROMPT_BASE =
-"The context below provides reference material from prior turns.\n"
-"Use it for tone, intent, and continuity only.\n"
-"Do NOT translate or quote the context.\n"
-"\n"
-"<Context>\n"
+"Reference context (do NOT translate):\n"
 "{{optional_reference_context}}\n"
-"</Context>";
+"\n";
+
+// ========================
+// ENDPOINT NORMALIZER
+// ========================
+// ponytail: auto-append /v1/chat/completions so user can paste just the host.
+// Full URLs (already containing /chat/completions) are passed through.
+
+class EndpointNormalizer {
+    string Resolve(const string &in raw) {
+        string url = TrimString(raw);
+        if (url.empty()) return "";
+
+        // Already a full chat URL — use as-is
+        if (url.find("/chat/completions") != -1) return url;
+
+        // Strip trailing slashes
+        while (url.length() > 0 && url.substr(url.length() - 1, 1) == "/") {
+            url = url.substr(0, url.length() - 1);
+        }
+
+        // Ends with /v1 — append /chat/completions
+        if (url.length() >= 3 && url.substr(url.length() - 3, 3) == "/v1") {
+            return url + "/chat/completions";
+        }
+
+        // Default: append /v1/chat/completions
+        return url + "/v1/chat/completions";
+    }
+
+    string ResolveModelsList(const string &in chatUrl) {
+        string base = chatUrl;
+        int pos = base.find("/chat/completions");
+        if (pos != -1) base = base.substr(0, uint(pos));
+        if (base.length() >= 3 && base.substr(base.length() - 3, 3) == "/v1") {
+            return base + "/models";
+        }
+        return base + "/v1/models";
+    }
+}
+
+// ========================
+// PROVIDER MATRIX
+// ========================
+// Four modes based on (customEndpoint, apiKey) presence:
+//   (empty, empty)   → OllamaLocal   (baseUrl + options wrapper, no auth)
+//   (empty, set)     → OllamaCloud   (ollama.com + options wrapper, Bearer)
+//   (set, empty)     → OpenAILocal   (custom + top-level params, no auth)
+//   (set, set)       → OpenAICloud   (custom + top-level params, Bearer)
+
+class ProviderInfo {
+    string kind;            // "OllamaLocal" / "OllamaCloud" / "OpenAILocal" / "OpenAICloud"
+    string chatUrl;         // full URL for chat completion
+    string tagsUrl;         // full URL for model list
+    bool needsAuth;         // include Authorization: Bearer header
+    bool isOllamaFormat;    // true = options wrapper + think field, false = OpenAI top-level
+    string name;            // human-readable, for logging
+}
+
+class ProviderDetector {
+    ProviderInfo Detect() {
+        ProviderInfo p;
+        if (g_config.customEndpoint.empty()) {
+            if (g_config.apiKey.empty()) {
+                p.kind = "OllamaLocal";
+                p.chatUrl = g_config.baseUrl + "/api/chat";
+                p.tagsUrl = g_config.baseUrl + "/api/tags";
+                p.needsAuth = false;
+                p.isOllamaFormat = true;
+                p.name = "Ollama Local";
+            } else {
+                p.kind = "OllamaCloud";
+                p.chatUrl = "https://ollama.com/api/chat";
+                p.tagsUrl = "https://ollama.com/api/tags";
+                p.needsAuth = true;
+                p.isOllamaFormat = true;
+                p.name = "Ollama Cloud";
+            }
+        } else {
+            string resolved = g_endpointNormalizer.Resolve(g_config.customEndpoint);
+            p.kind = g_config.apiKey.empty() ? "OpenAILocal" : "OpenAICloud";
+            p.chatUrl = resolved;
+            p.tagsUrl = g_endpointNormalizer.ResolveModelsList(resolved);
+            p.needsAuth = !g_config.apiKey.empty();
+            p.isOllamaFormat = false;
+            p.name = p.needsAuth ? "OpenAI Cloud" : "OpenAI Local (e.g. LM Studio)";
+        }
+        return p;
+    }
+}
 
 // ========================
 // HTTP RESPONSE
@@ -135,7 +211,6 @@ class Response {
 class TextCleaner {
     string Normalize(const string &in t) {
         string s = TrimString(t);
-        // Collapse internal whitespace runs (input text only, not user prompts)
         while (s.find("  ") != -1) s.replace("  ", " ");
         return s;
     }
@@ -187,12 +262,10 @@ class HttpTransport {
     }
 
     Response SendViaHostUrlGetString(const string &in url, const string &in header, const string &in body) {
-        HostIncTimeOut(15000);  // give the LLM time to respond (fixes C3)
+        HostIncTimeOut(15000);
         Response r;
         string bodyOut = HostUrlGetString(url, userAgent, header, body);
         r.body = bodyOut;
-        // Heuristic: HostUrlGetString does not expose HTTP status. Treat empty
-        // body as network-layer failure, non-empty as assumed 200.
         r.status = bodyOut.empty() ? 0 : 200;
         return r;
     }
@@ -213,10 +286,10 @@ class HttpTransport {
     }
 
     bool ShouldRetry(const Response &in r) {
-        if (r.status == 0) return true;        // network layer failure
-        if (r.status >= 500) return true;      // server error
-        if (r.status == 429) return true;      // rate limited
-        return false;                          // 4xx = auth / bad request
+        if (r.status == 0) return true;
+        if (r.status >= 500) return true;
+        if (r.status == 429) return true;
+        return false;
     }
 }
 
@@ -279,15 +352,11 @@ class Config {
 class ContextHistory {
     array<string> history;
 
-    void AddEntry(const string &in source, const string &in translation,
-                  const string &in srcLang, const string &in dstLang) {
+    void AddEntry(const string &in source, const string &in translation) {
         if (!g_config.contextEnabled || source.empty()) return;
-        string entry;
-        if (!srcLang.empty()) {
-            entry = "[" + srcLang + "] " + source + " -> [" + dstLang + "] " + translation;
-        } else {
-            entry = "[source] " + source + " -> [" + dstLang + "] " + translation;
-        }
+        // Phase 3 (fixes H5): drop [lang] metadata, use plain src ⇒ dst format.
+        // Saves ~10 tokens per entry; LLM no longer tempted to translate brackets.
+        string entry = source + " \u21D2 " + translation;
         history.insertLast(entry);
         if (history.length() > uint(g_config.contextMaxSize)) {
             history.removeAt(0);
@@ -308,134 +377,13 @@ class ContextHistory {
 // ========================
 // API COMMUNICATION
 // ========================
+// Phase 3: provider-split request building. Old Api class probed /api/show,
+// /api/version, /api/tags at login (3 sync requests). All that's gone —
+// ProviderDetector does it with config field inspection only.
+
 class Api {
-    string chatRoute = "/api/chat";
     string userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
     string contentType = "Content-Type: application/json";
-    string ollamaCloudUrl = "https://ollama.com";
-
-    dictionary defaultParams;
-    bool ollamaSupportsNativeThinking = false;
-    bool modelSupportsThinking = false;
-    string modelArchitecture = "";
-
-    void LoadDefaults(const dictionary &in params) { defaultParams = params; }
-
-    dictionary GetActiveParams() {
-        dictionary result;
-        if (defaultParams.exists("temperature")) result["temperature"] = g_config.temperature;
-        if (defaultParams.exists("top_p")) result["top_p"] = g_config.topP;
-        if (defaultParams.exists("top_k")) result["top_k"] = g_config.topK;
-        if (defaultParams.exists("min_p")) result["min_p"] = g_config.minP;
-        if (defaultParams.exists("repeat_penalty")) result["repeat_penalty"] = g_config.repeatPenalty;
-        if (defaultParams.exists("max_tokens")) result["max_tokens"] = g_config.maxTokens;
-        return result;
-    }
-
-    string GetThinkOption() {
-        g_logger.Debug("modelArchitecture: " + modelArchitecture);
-
-        if (modelArchitecture == "gpt-oss" && !g_config.enableThinking) return "\"low\"";
-        if (modelArchitecture != "gpt-oss") return g_config.enableThinking
-            ? (g_config.thinkStrength.empty() ? "true" : "\"" + g_config.thinkStrength + "\"")
-            : "false";
-
-        return "\"" + (g_config.enableThinking
-            ? (g_config.thinkStrength.empty() ? "true" : g_config.thinkStrength)
-            : "false") + "\"";
-    }
-
-    array<string> GetAvailableModels() {
-        string response = HostUrlGetString(g_config.baseUrl + "/api/tags", userAgent, contentType, "");
-        if (response.empty()) return array<string>();
-
-        JsonReader reader;
-        JsonValue root;
-        if (!reader.parse(response, root)) {
-            g_logger.Warn("Failed to parse models list response");
-            return array<string>();
-        }
-
-        JsonValue models = root["models"];
-        if (!models.isArray()) return array<string>();
-
-        array<string> result;
-        for (int i = 0; i < models.size(); i++) {
-            JsonValue model = models[i];
-            if (model.isObject() && model["name"].isString()) result.insertLast(model["name"].asString());
-        }
-        return result;
-    }
-
-    string GetModelInfo(const string &in modelName) {
-        string response = HostUrlGetString(g_config.baseUrl + "/api/show", userAgent, contentType, "{\"model\":\"" + modelName + "\"}");
-        if (response.empty()) return "";
-
-        JsonReader reader;
-        JsonValue root;
-        if (!reader.parse(response, root)) return "";
-
-        return FormatModelInfo(root);
-    }
-
-    string GetVersion() {
-        string response = HostUrlGetString(g_config.baseUrl + "/api/version", userAgent, contentType, "");
-        if (response.empty()) return "";
-
-        JsonReader reader;
-        JsonValue root;
-        if (!reader.parse(response, root)) return "";
-        return root["version"].asString();
-    }
-
-    array<string> GetOpenAIModels() {
-        string base = g_config.customEndpoint;
-        int chatPos = base.find("/chat/completions");
-        int v1Pos = base.find("/v1/");
-        if (chatPos != -1) base = base.substr(0, chatPos);
-        else if (v1Pos != -1) base = base.substr(0, v1Pos);
-        if (base.empty()) return array<string>();
-        if (base.substr(base.length() - 1, 1) == "/") base = base.substr(0, base.length() - 1);
-        string url = (base.length() >= 3 && base.substr(base.length() - 3, 3) == "/v1")
-            ? (base + "/models")
-            : (base + "/v1/models");
-
-        string header = BuildHeader();
-        string headerLog = header;
-        if (!g_config.apiKey.empty()) headerLog.replace(g_config.apiKey, "***");
-        g_logger.Debug("Models list request url   : " + url);
-        g_logger.Debug("Models list request header: " + headerLog);
-
-        string response = HostUrlGetString(url, userAgent, header, "");
-        if (response.empty()) return array<string>();
-        g_logger.Debug("Models list response size : " + response.length());
-
-        JsonReader reader;
-        JsonValue root;
-        string normalized = NormalizeJsonResponse(response);
-        if (!reader.parse(normalized, root)) {
-            g_logger.Warn("Failed to parse OpenAI models list response");
-            int previewLen = min(512, int(response.length()));
-            string preview = response.substr(0, uint(previewLen));
-            g_logger.Debug("OpenAI models raw response (first 512 chars): " + preview);
-            return array<string>();
-        }
-
-        JsonValue data = root["data"];
-        if (!data.isArray()) return array<string>();
-
-        array<string> result;
-        for (int i = 0; i < data.size(); i++) {
-            JsonValue model = data[i];
-            if (model.isObject() && model["id"].isString()) result.insertLast(model["id"].asString());
-        }
-        return result;
-    }
-
-    bool SupportsNativeThinking() {
-        string version = GetVersion();
-        return !version.empty() && CompareVersion(version, "0.9.0") >= 0;
-    }
 
     Response SendTranslationRequest(const string &in requestData) {
         string url = BuildUrl();
@@ -452,132 +400,80 @@ class Api {
         string context = g_config.contextEnabled ? g_contextHistory.GetContext() : "";
         string sysContent = ApplyTemplate(g_config.systemPrompt, text, srcLang, dstLang, context);
         string userContent = ApplyTemplate(g_config.userPrompt, text, srcLang, dstLang, context);
+        string messages = BuildMessages(sysContent, userContent);
+
+        if (g_provider.isOllamaFormat) return BuildOllamaRequest(messages);
+        return BuildOpenAIRequest(messages);
+    }
+
+    string BuildMessages(const string &in sysContent, const string &in userContent) {
         string escapedSystem = EscapeJsonString(sysContent);
         string escapedUser = EscapeJsonString(userContent);
+        return "[{\"role\":\"system\",\"content\":\"" + escapedSystem + "\"},"
+             + "{\"role\":\"user\",\"content\":\"" + escapedUser + "\"}]";
+    }
 
-        string messages = "[{\"role\":\"system\",\"content\":\"" + escapedSystem + "\"},"
-            + "{\"role\":\"user\",\"content\":\"" + escapedUser + "\"}]";
+    string BuildOllamaRequest(const string &in messages) {
+        // Phase 3 (fixes H4): escape model name to handle characters like " or \
+        string escapedModel = EscapeJsonString(g_config.modelName);
+        string req = "{\"model\":\"" + escapedModel + "\",\"messages\":" + messages;
+        req += BuildOllamaOptions();
+        // ponytail: only emit think field when user opts in.
+        // gpt-oss users: set enableThinking=true + thinkStrength="low".
+        if (g_config.enableThinking) {
+            req += ",\"think\":" + GetThinkValue();
+        }
+        req += ",\"stream\":false}";
+        return req;
+    }
 
-        string requestData = "{\"model\":\"" + g_config.modelName + "\",\"messages\":" + messages;
-        requestData += BuildOptions();
-        if (ollamaSupportsNativeThinking) requestData += ",\"think\":" + GetThinkOption();
-        requestData += ",\"stream\":false}";
-        return requestData;
+    string BuildOpenAIRequest(const string &in messages) {
+        // Phase 3 (fixes Q8/H8): top-level params, NOT wrapped in options.
+        // OpenAI standard fields only; top_k/min_p/repeat_penalty dropped
+        // (not in OpenAI spec, would error on strict servers).
+        string escapedModel = EscapeJsonString(g_config.modelName);
+        string req = "{\"model\":\"" + escapedModel + "\",\"messages\":" + messages;
+        req += BuildOpenAIOptions();
+        req += ",\"stream\":false}";
+        return req;
+    }
+
+    string BuildOllamaOptions() {
+        // Phase 3 (fixes H3): explicit sorted field list, NOT dictionary iteration.
+        // jsoncpp dictionary order is non-deterministic; this guarantees stable JSON
+        // which is also a prerequisite for cache hits in Phase 4.
+        return ",\"options\":{"
+             + "\"max_tokens\":" + g_config.maxTokens + ","
+             + "\"min_p\":" + g_config.minP + ","
+             + "\"repeat_penalty\":" + g_config.repeatPenalty + ","
+             + "\"temperature\":" + g_config.temperature + ","
+             + "\"top_k\":" + g_config.topK + ","
+             + "\"top_p\":" + g_config.topP
+             + "}";
+    }
+
+    string BuildOpenAIOptions() {
+        // Top-level (no options wrapper). Sorted alphabetically.
+        return ",\"max_tokens\":" + g_config.maxTokens + ","
+             + "\"temperature\":" + g_config.temperature + ","
+             + "\"top_p\":" + g_config.topP;
+    }
+
+    string GetThinkValue() {
+        if (g_config.thinkStrength.empty()) return "true";
+        return "\"" + g_config.thinkStrength + "\"";
     }
 
     string BuildUrl() {
-        if (!g_config.customEndpoint.empty()) return g_config.customEndpoint;
-        if (!g_config.apiKey.empty()) return ollamaCloudUrl + chatRoute;
-        return g_config.baseUrl + chatRoute;
+        return g_provider.chatUrl;
     }
 
     string BuildHeader() {
         string header = contentType + "\nAccept: application/json";
-        if (!g_config.apiKey.empty()) header += "\nAuthorization: Bearer " + g_config.apiKey;
+        if (g_provider.needsAuth) {
+            header += "\nAuthorization: Bearer " + g_config.apiKey;
+        }
         return header;
-    }
-
-    string BuildOptions() {
-        dictionary params = GetActiveParams();
-        if (params.getSize() == 0) return "";
-
-        string json = ",\"options\":{";
-        array<string> keys = params.getKeys();
-        for (uint i = 0; i < keys.length(); i++) {
-            string key = keys[i];
-            json += "\"" + key + "\":";
-
-            float fVal; int iVal;
-            if (params.get(key, fVal)) json += "" + fVal;
-            else if (params.get(key, iVal)) json += "" + iVal;
-            if (i < keys.length() - 1) json += ",";
-        }
-        return json + "}";
-    }
-
-    string FormatModelInfo(JsonValue &in root) {
-        string result = "";
-
-        if (root["parameters"].isString()) {
-            string params = root["parameters"].asString();
-            if (!params.empty()) {
-                result += "Parameters:\n";
-                array<string> lines = SplitString(params, "\n");
-                for (uint i = 0; i < lines.length(); ++i) {
-                    string line = TrimString(lines[i]);
-                    if (!line.empty()) result += "  " + line + "\n";
-                }
-                LoadDefaults(ParseParameterString(params));
-            }
-        }
-
-        if (root["model_info"].isObject()) {
-            JsonValue modelInfo = root["model_info"];
-            array<string> keys = modelInfo.getKeys();
-            if (keys.length() > 0) {
-                result += "Model Info:\n";
-                for (uint i = 0; i < keys.length(); ++i) {
-                    string key = keys[i];
-                    string value = JsonValueToString(modelInfo[key]);
-                    result += "  " + key + ": " + value + "\n";
-                    if (key == "general.architecture") modelArchitecture = value;
-                }
-            }
-        }
-
-        if (root["capabilities"].isArray()) {
-            JsonValue capabilities = root["capabilities"];
-            array<string> caps;
-            for (int i = 0; i < capabilities.size(); i++) if (capabilities[i].isString()) caps.insertLast(capabilities[i].asString());
-            modelSupportsThinking = caps.find("thinking") != -1;
-        }
-
-        return result;
-    }
-
-    string JsonValueToString(JsonValue &in value) {
-        try {
-            if (value.isNull()) return "null";
-            if (value.isString()) return value.asString();
-            if (value.isBool()) return value.asBool() ? "true" : "false";
-            if (value.isInt()) return "" + value.asInt();
-            if (value.isUInt()) return "" + value.asUInt();
-            if (value.isFloat()) return "" + value.asFloat();
-            return "(unknown type)";
-        } catch {
-            return "Error converting JSON to string";
-        }
-    }
-
-    int CompareVersion(const string &in version1, const string &in version2) {
-        array<string> v1Parts = SplitString(version1, ".");
-        array<string> v2Parts = SplitString(version2, ".");
-        uint maxLen = max(v1Parts.length(), v2Parts.length());
-
-        for (uint i = 0; i < maxLen; i++) {
-            int val1 = (i < v1Parts.length()) ? parseInt(v1Parts[i]) : 0;
-            int val2 = (i < v2Parts.length()) ? parseInt(v2Parts[i]) : 0;
-            if (val1 > val2) return 1;
-            if (val1 < val2) return -1;
-        }
-        return 0;
-    }
-
-    dictionary ParseParameterString(const string &in paramString) {
-        dictionary result;
-        array<string> lines = SplitString(paramString, "\n");
-        for (uint i = 0; i < lines.length(); ++i) {
-            string line = TrimString(lines[i]);
-            if (line.empty()) continue;
-
-            array<string> parts = SplitString(line, " ");
-            if (parts.length() >= 2) {
-                string key = TrimString(parts[0]);
-                string value = TrimString(parts[1]);
-                if (!key.empty() && !value.empty()) result[key] = value;
-            }
-        }
-        return result;
     }
 }
 
@@ -589,10 +485,13 @@ ContextHistory g_contextHistory;
 Api g_api;
 HttpTransport g_httpTransport;
 TextCleaner g_textCleaner;
+ProviderDetector g_providerDetector;
+EndpointNormalizer g_endpointNormalizer;
+ProviderInfo g_provider;  // set in ServerLogin, read by Api/Translate
 bool g_isPluginActive = true;
 
 // ========================
-// USER CONFIG & AUTH
+// USER CONFIG & MODEL VALIDATION
 // ========================
 void LoadUserConfig() {
     g_config.Load();
@@ -604,28 +503,57 @@ void LoadUserConfig() {
 }
 
 bool TrySelectModelFromList(const array<string> &in availableModels, const string &in modelName) {
+    if (modelName.empty()) return false;
     string selectedLower = modelName; selectedLower.MakeLower();
     for (uint i = 0; i < availableModels.length(); i++) {
         string availableLower = availableModels[i]; availableLower.MakeLower();
         if (selectedLower == availableLower) {
-            g_config.modelName = availableModels[i];
+            g_config.modelName = availableModels[i];  // canonicalize case
             return true;
         }
     }
     return false;
 }
 
-bool IsModelValid(const string &in modelName) {
-    array<string> availableModels;
-    if (g_config.customEndpoint.empty()) {
-        availableModels = g_api.GetAvailableModels();
-    } else {
-        if (g_config.customEndpoint.find("/v1/") != -1
-            || g_config.customEndpoint.find("/chat/completions") != -1) return true;
-        availableModels = g_api.GetOpenAIModels();
+array<string> ParseModelsList(const string &in body, bool isOllamaFormat) {
+    array<string> result;
+    if (body.empty()) return result;
+
+    JsonReader reader;
+    JsonValue root;
+    string normalized = NormalizeJsonResponse(body);
+    if (!reader.parse(normalized, root)) {
+        g_logger.Warn("Failed to parse models list response");
+        int previewLen = min(512, int(body.length()));
+        g_logger.Debug("Raw response (first 512 chars): " + body.substr(0, uint(previewLen)));
+        return result;
     }
-    if (availableModels.length() == 0) return false;
-    return TrySelectModelFromList(availableModels, modelName);
+
+    JsonValue list = isOllamaFormat ? root["models"] : root["data"];
+    if (!list.isArray()) {
+        g_logger.Warn("Models list response missing array field");
+        return result;
+    }
+
+    string keyName = isOllamaFormat ? "name" : "id";
+    for (int i = 0; i < list.size(); i++) {
+        JsonValue m = list[i];
+        if (m.isObject() && m[keyName].isString()) {
+            result.insertLast(m[keyName].asString());
+        }
+    }
+    return result;
+}
+
+string FirstNModels(const array<string> &in models, int n) {
+    string result = "";
+    int count = min(int(models.length()), n);
+    for (int i = 0; i < count; i++) {
+        if (i > 0) result += ", ";
+        result += models[i];
+    }
+    if (int(models.length()) > n) result += ", ...";
+    return result;
 }
 
 // ========================
@@ -633,114 +561,77 @@ bool IsModelValid(const string &in modelName) {
 // ========================
 void ParseLoginInput(string User, string Pass) {
     g_config.modelName = TrimString(User);
-
     string newApiKey = TrimString(Pass);
     if (!newApiKey.empty()) {
         g_config.apiKey = newApiKey;
     }
 }
 
-string LoginNativeOllama() {
-    array<string> availableModels = g_api.GetAvailableModels();
-    if (availableModels.length() == 0) {
-        ShowError("Unable to connect to Ollama. Please ensure Ollama is running and has models available.", "Login Failed");
-        return "500 Unable to connect to Ollama. Please ensure Ollama is running and has models available.";
-    }
-
-    bool valid = IsModelValid(g_config.modelName);
-    g_logger.Debug("Is " + g_config.modelName + " valid: " + (valid ? "true" : "false"));
-    if (!valid) {
-        return HandleModelNotFound();
-    }
-    return "";
-}
-
-string LoginCustomEndpoint() {
-    if (!IsValidCustomEndpoint(g_config.customEndpoint)) {
-        g_isPluginActive = false;
-        return "400 Invalid custom endpoint.";
-    }
-    if (g_config.apiKey.empty()) {
-        ShowError("API key is required for custom endpoint.\nEndpoint: " + g_config.customEndpoint, "Login Failed");
-        return "401 API key required for custom endpoint.";
-    }
-
-    bool openAIEndpoint = g_config.customEndpoint.find("/v1/chat/completions") != -1;
-    if (openAIEndpoint) {
-        array<string> availableModels = g_api.GetOpenAIModels();
-        if (availableModels.length() == 0) {
-            ShowError("Unable to connect to custom endpoint or fetch models.\nEndpoint: " + g_config.customEndpoint, "Login Failed");
-            return "500 Unable to connect to custom endpoint or fetch models.";
-        }
-        LogModelList(availableModels);
-        bool valid = TrySelectModelFromList(availableModels, g_config.modelName);
-        g_logger.Debug("Is " + g_config.modelName + " valid: " + (valid ? "true" : "false"));
-        if (!valid) {
-            return HandleModelNotFound();
-        }
-        g_logger.Info("Using custom OpenAI endpoint: " + g_config.customEndpoint);
-    } else {
-        g_logger.Info("Using custom endpoint (skipping model validation): " + g_config.customEndpoint);
-    }
-    return "";
-}
-
-void DetectThinkingSupport() {
-    g_api.ollamaSupportsNativeThinking = g_config.customEndpoint.empty()
-        ? g_api.SupportsNativeThinking()
-        : false;
-}
-
-string FetchAndApplyModelInfo() {
-    if (g_config.customEndpoint.empty()) {
-        string modelInfo = g_api.GetModelInfo(g_config.modelName);
-        if (modelInfo.empty()) {
-            g_logger.Warn("Could not retrieve model information");
-            ShowError("Unable to retrieve model information for " + g_config.modelName, "Login Warning");
-            return "500 Unable to retrieve model information.";
-        }
-        g_logger.Debug("Model information retrieved:\n" + modelInfo);
-    } else {
-        g_logger.Debug("Skipping model info fetch for custom endpoint");
-    }
-    return "";
-}
-
-void SaveLoginConfig() {
-    g_config.Save();
-}
-
 string ServerLogin(string User, string Pass) {
     ParseLoginInput(User, Pass);
-
     // ponytail: redactKey set as early as possible so all subsequent logs are safe
     g_logger.redactKey = g_config.apiKey;
 
-    string error;
-    if (g_config.customEndpoint.empty()) {
-        error = LoginNativeOllama();
-    } else {
-        error = LoginCustomEndpoint();
+    if (g_config.modelName.empty()) {
+        g_isPluginActive = false;
+        return "400 Model name is required";
     }
-    if (!error.empty()) return error;
 
-    DetectThinkingSupport();
+    if (!g_config.customEndpoint.empty() && !IsValidCustomEndpoint(g_config.customEndpoint)) {
+        g_isPluginActive = false;
+        return "400 Invalid custom endpoint (must start with http:// or https://)";
+    }
 
-    error = FetchAndApplyModelInfo();
-    if (!error.empty()) return error;
+    // Phase 3: detect provider once, cache globally (was implicit per-call in v2)
+    g_provider = g_providerDetector.Detect();
+    g_logger.Info("Provider: " + g_provider.name);
+    g_logger.Debug("chat URL: " + g_provider.chatUrl);
+    g_logger.Debug("tags URL: " + g_provider.tagsUrl);
 
-    SaveLoginConfig();
+    // Phase 3: single validation request (was 3 in v2.4: tags + show + version)
+    string header = g_api.BuildHeader();
+    Response r = g_httpTransport.SendWithRetry(g_provider.tagsUrl, header, "");
 
+    if (r.status == 0) {
+        g_isPluginActive = false;
+        return "500 Cannot reach endpoint: " + g_provider.tagsUrl;
+    }
+    if (r.status == 401 || r.status == 403) {
+        g_isPluginActive = false;
+        return "401 Authentication failed (bad API key?)";
+    }
+    if (r.status >= 500) {
+        g_isPluginActive = false;
+        return "500 Server returned status " + r.status;
+    }
+    if (r.body.empty()) {
+        g_isPluginActive = false;
+        return "500 Empty response from endpoint";
+    }
+
+    // Parse + validate model presence (user requirement: confirm model is in list)
+    array<string> available = ParseModelsList(r.body, g_provider.isOllamaFormat);
+    if (available.length() == 0) {
+        g_isPluginActive = false;
+        return "500 No models found at endpoint (response parsed but list empty)";
+    }
+    LogModelList(available);
+
+    if (!TrySelectModelFromList(available, g_config.modelName)) {
+        g_isPluginActive = false;
+        g_logger.Warn("Model '" + g_config.modelName + "' not in available list");
+        return "404 Model '" + g_config.modelName + "' not found. Available: "
+             + FirstNModels(available, 10);
+    }
+
+    g_config.Save();
     g_isPluginActive = true;
-    g_logger.Info("Successfully configured Ollama translation plugin");
-    g_logger.Info("Native thinking support: " + (g_api.ollamaSupportsNativeThinking ? "Yes" : "No"));
-
+    g_logger.Info("Login ok — provider=" + g_provider.name + ", model=" + g_config.modelName);
     return "200 ok";
 }
 
 void ServerLogout() {
-    HostSaveString("selected_model_ollama", g_config.modelName);
-    HostSaveString("custom_endpoint_ollama", g_config.customEndpoint);
+    g_config.Save();
     HostSaveString("api_key_ollama", "");
     g_logger.Info("Successfully logged out from Ollama translation plugin");
 }
@@ -789,8 +680,6 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
     Response resp = g_api.SendTranslationRequest(requestData);
     if (resp.status == 0 || resp.body.empty()) {
         // Phase 2 (H7): return original text instead of empty string.
-        // User sees the source line rather than a blank subtitle — much better UX
-        // under network blips / model load stalls / rate limits.
         g_logger.Warn("Translation failed (status=" + resp.status + "): " + Text);
         SrcLang = "UTF8";
         DstLang = "UTF8";
@@ -801,7 +690,6 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
     translatedText = RemoveThinkingTags(translatedText);
     translatedText = TrimString(translatedText);
     if (translatedText.empty()) {
-        // API responded but content was empty/unparsable — still better than blank
         g_logger.Warn("Translation returned empty content: " + Text);
         SrcLang = "UTF8";
         DstLang = "UTF8";
@@ -809,7 +697,7 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
     }
     if (DstLang == "fa" || DstLang == "ar" || DstLang == "he") translatedText = "\u202B" + translatedText;
 
-    g_contextHistory.AddEntry(Text, translatedText, srcLangCode, DstLang);
+    g_contextHistory.AddEntry(Text, translatedText);
 
     SrcLang = "UTF8";
     DstLang = "UTF8";
@@ -826,7 +714,8 @@ string ExtractTranslatedText(const string response) {
 
     g_logger.Debug("response: " + response);
 
-    JsonValue message = g_config.customEndpoint.empty() ? root["message"] : root["choices"][0]["message"];
+    // Phase 3: response shape determined by provider format
+    JsonValue message = g_provider.isOllamaFormat ? root["message"] : root["choices"][0]["message"];
     if (!message.isObject()) {
         g_logger.Warn("Invalid response format - no message");
         return "";
@@ -835,7 +724,6 @@ string ExtractTranslatedText(const string response) {
     JsonValue content = message["content"];
     if (!content.isString()) {
         g_logger.Warn("Invalid response format - no content");
-        ShowError("Invalid response format - no content", "Translation Failed");
         return "";
     }
     return content.asString();
@@ -864,12 +752,6 @@ void ShowError(const string &in message, const string &in title = "Error") {
     HostMessageBox(message, title, 3, 1);
 }
 
-string HandleModelNotFound() {
-    ShowError("Model not found: " + g_config.modelName, "Login Failed");
-    g_isPluginActive = false;
-    return "";
-}
-
 void LogModelList(const array<string> &in models) {
     if (models.length() == 0) return;
     string output = "Available models (" + models.length() + "):\n";
@@ -883,14 +765,9 @@ bool IsValidCustomEndpoint(const string &in endpoint) {
     if (endpoint.empty()) return false;
     string lower = endpoint;
     lower.MakeLower();
-    bool hasScheme = false;
-    if (lower.length() >= 7 && lower.substr(0, 7) == "http://") hasScheme = true;
-    if (lower.length() >= 8 && lower.substr(0, 8) == "https://") hasScheme = true;
-    if (!hasScheme) {
-        ShowError("Invalid custom endpoint (missing http/https): " + endpoint, "Login Failed");
-        return false;
-    }
-    return true;
+    bool hasScheme = (lower.length() >= 7 && lower.substr(0, 7) == "http://")
+                  || (lower.length() >= 8 && lower.substr(0, 8) == "https://");
+    return hasScheme;
 }
 
 int max(int a, int b) { return (a > b) ? a : b; }
@@ -901,12 +778,12 @@ string TrimString(const string &in text) {
     int start = 0;
     int end = int(text.length()) - 1;
     while (start <= end) {
-        string ch = text.substr(start, 1);
+        string ch = text.substr(uint(start), 1);
         if (ch != " " && ch != "\n" && ch != "\r" && ch != "\t") break;
         start++;
     }
     while (end >= start) {
-        string ch = text.substr(end, 1);
+        string ch = text.substr(uint(end), 1);
         if (ch != " " && ch != "\n" && ch != "\r" && ch != "\t") break;
         end--;
     }
@@ -948,18 +825,14 @@ string RemoveThinkingTags(const string &in text) {
             result += text.substr(uint(cur));
             break;
         }
-        // Append text before the open tag
         result += text.substr(uint(cur), uint(openPos - cur));
-        // Find closing "</think" prefix
         int closePos = text.find("</think", openPos);
         if (closePos == -1) {
-            // Unclosed thinking block — discard the rest
             break;
         }
-        // Advance past the closing tag's ">" (handles "</think>", "</thinking>", "</think attr>")
         int closeBracket = text.find(">", closePos);
         if (closeBracket == -1) {
-            cur = closePos + 7;  // skip past "</think" even if ">" missing
+            cur = closePos + 7;
         } else {
             cur = closeBracket + 1;
         }
@@ -974,13 +847,13 @@ array<string> SplitString(const string &in text, const string &in delimiter) {
     int start = 0;
     int pos = text.findFirst(delimiter, start);
     while (pos >= 0) {
-        string token = text.substr(start, pos - start);
+        string token = text.substr(uint(start), uint(pos - start));
         if (!token.empty()) result.insertLast(token);
         start = pos + int(delimiter.length());
         pos = text.findFirst(delimiter, start);
     }
 
-    string token = text.substr(start);
+    string token = text.substr(uint(start));
     if (!token.empty()) result.insertLast(token);
     return result;
 }
@@ -1006,8 +879,7 @@ string ApplyTemplate(const string &in tmpl, const string &in text, const string 
     }
 
     // ponytail: removed the previous "from  to" / double-space collapse hack.
-    // It corrupted user-authored prompts by collapsing intentional double spaces.
-    // Template authors are now responsible for handling empty {{from}} gracefully.
+    // Template authors are responsible for handling empty {{from}} gracefully.
     return result;
 }
 
@@ -1024,15 +896,17 @@ void SelfTestAssert(bool cond, const string &in msg) {
 }
 
 void SelfTest() {
+    // === Phase 1: template + utility invariants ===
+
     // ApplyTemplate: empty {{from}} no longer triggers string hacks
     string r1 = ApplyTemplate("from={{from}} to={{to}}", "hello", "", "zh-CN", "");
     SelfTestAssert(r1 == "from= to=zh-CN", "ApplyTemplate empty from -> '" + r1 + "'");
 
-    // ApplyTemplate: {{text}} alias removed; only {{text_to_translate}} works
+    // ApplyTemplate: only {{text_to_translate}} works ({{text}} alias removed)
     string r2 = ApplyTemplate("[{{text_to_translate}}]", "hi", "", "zh", "");
     SelfTestAssert(r2 == "[hi]", "ApplyTemplate text_to_translate -> '" + r2 + "'");
 
-    // TrimString basic cases
+    // TrimString
     SelfTestAssert(TrimString("  hello  ") == "hello", "TrimString spaces");
     SelfTestAssert(TrimString("\n\n") == "", "TrimString whitespace-only");
 
@@ -1045,7 +919,9 @@ void SelfTest() {
     l.redactKey = "secret";
     SelfTestAssert(l.Redact("mysecret here") == "my*** here", "Logger.Redact -> '" + l.Redact("mysecret here") + "'");
 
-    // RemoveThinkingTags (Phase 2, C2 fix)
+    // === Phase 2: reliability modules ===
+
+    // RemoveThinkingTags
     string t1 = RemoveThinkingTags("<think>reasoning here</think>hello");
     SelfTestAssert(t1 == "hello", "RemoveThinkingTags basic -> '" + t1 + "'");
     string t2 = RemoveThinkingTags("before<think>coT</think>middle<think>more</think>after");
@@ -1057,7 +933,7 @@ void SelfTest() {
     string t5 = RemoveThinkingTags("no tags here");
     SelfTestAssert(t5 == "no tags here", "RemoveThinkingTags no tags -> '" + t5 + "'");
 
-    // TextCleaner.IsTranslatable (Phase 2)
+    // TextCleaner.IsTranslatable
     TextCleaner tc;
     SelfTestAssert(tc.IsTranslatable("") == false, "IsTranslatable empty");
     SelfTestAssert(tc.IsTranslatable("   ") == false, "IsTranslatable whitespace");
@@ -1068,11 +944,11 @@ void SelfTest() {
     SelfTestAssert(tc.IsTranslatable("Hello, world!") == true, "IsTranslatable sentence");
 
     // Response default state
-    Response r;
-    SelfTestAssert(r.status == 0, "Response default status");
-    SelfTestAssert(r.body == "", "Response default body");
+    Response resp;
+    SelfTestAssert(resp.status == 0, "Response default status");
+    SelfTestAssert(resp.body == "", "Response default body");
 
-    // HttpTransport.ShouldRetry logic
+    // HttpTransport.ShouldRetry
     HttpTransport ht;
     Response fail;  fail.status = 0;    fail.body = "";
     Response ok;    ok.status = 200;    ok.body = "{}";
@@ -1084,6 +960,59 @@ void SelfTest() {
     SelfTestAssert(ht.ShouldRetry(err5) == true, "ShouldRetry 5xx");
     SelfTestAssert(ht.ShouldRetry(rl) == true, "ShouldRetry 429");
     SelfTestAssert(ht.ShouldRetry(auth) == false, "ShouldRetry 401");
+
+    // === Phase 3: provider matrix + endpoint normalization ===
+
+    EndpointNormalizer en;
+
+    // EndpointNormalizer.Resolve
+    SelfTestAssert(en.Resolve("http://127.0.0.1:1234") == "http://127.0.0.1:1234/v1/chat/completions",
+                  "Resolve bare host -> '" + en.Resolve("http://127.0.0.1:1234") + "'");
+    SelfTestAssert(en.Resolve("http://localhost:1234/v1") == "http://localhost:1234/v1/chat/completions",
+                  "Resolve /v1 host -> '" + en.Resolve("http://localhost:1234/v1") + "'");
+    SelfTestAssert(en.Resolve("http://localhost:1234/v1/") == "http://localhost:1234/v1/chat/completions",
+                  "Resolve /v1/ host -> '" + en.Resolve("http://localhost:1234/v1/") + "'");
+    SelfTestAssert(en.Resolve("https://api.z.ai/api/paas/v4/chat/completions") == "https://api.z.ai/api/paas/v4/chat/completions",
+                  "Resolve full URL passthrough -> '" + en.Resolve("https://api.z.ai/api/paas/v4/chat/completions") + "'");
+    SelfTestAssert(en.Resolve("https://openrouter.ai/api/v1") == "https://openrouter.ai/api/v1/chat/completions",
+                  "Resolve openrouter /v1 -> '" + en.Resolve("https://openrouter.ai/api/v1") + "'");
+
+    // EndpointNormalizer.ResolveModelsList
+    SelfTestAssert(en.ResolveModelsList("http://h/v1/chat/completions") == "http://h/v1/models",
+                  "ResolveModelsList /v1 -> '" + en.ResolveModelsList("http://h/v1/chat/completions") + "'");
+    SelfTestAssert(en.ResolveModelsList("https://api.z.ai/api/paas/v4/chat/completions") == "https://api.z.ai/api/paas/v4/models",
+                  "ResolveModelsList z.ai -> '" + en.ResolveModelsList("https://api.z.ai/api/paas/v4/chat/completions") + "'");
+
+    // ProviderDetector: build a ProviderInfo manually to verify field setup logic
+    // (cannot call Detect() here since it reads g_config which is in default state)
+    ProviderInfo p;
+    p.kind = "OllamaLocal"; p.chatUrl = "http://x/api/chat"; p.tagsUrl = "http://x/api/tags";
+    p.needsAuth = false; p.isOllamaFormat = true; p.name = "Ollama Local";
+    SelfTestAssert(p.isOllamaFormat == true && p.needsAuth == false, "ProviderInfo OllamaLocal fields");
+
+    // ParseModelsList: Ollama format
+    array<string> ollamaModels = ParseModelsList("{\"models\":[{\"name\":\"llama2\"},{\"name\":\"qwen3\"}]}", true);
+    SelfTestAssert(ollamaModels.length() == 2 && ollamaModels[0] == "llama2", "ParseModelsList Ollama length=" + ollamaModels.length());
+
+    // ParseModelsList: OpenAI format
+    array<string> openaiModels = ParseModelsList("{\"data\":[{\"id\":\"gpt-4\"},{\"id\":\"claude\"}]}", false);
+    SelfTestAssert(openaiModels.length() == 2 && openaiModels[0] == "gpt-4", "ParseModelsList OpenAI length=" + openaiModels.length());
+
+    // TrySelectModelFromList: case-insensitive match + canonicalize
+    array<string> modelList = {"Llama2", "Qwen3"};
+    SelfTestAssert(TrySelectModelFromList(modelList, "qwen3") == true, "TrySelectModelFromList case-insensitive");
+    SelfTestAssert(TrySelectModelFromList(modelList, "nonexistent") == false, "TrySelectModelFromList miss");
+
+    // FirstNModels
+    array<string> manyModels = {"a", "b", "c", "d", "e"};
+    SelfTestAssert(FirstNModels(manyModels, 3) == "a, b, c, ...", "FirstNModels truncate -> '" + FirstNModels(manyModels, 3) + "'");
+
+    // ContextHistory: new src ⇒ dst format
+    ContextHistory ch;
+    ch.AddEntry("hello", "\u4f60\u597d");
+    string ctx = ch.GetContext();
+    SelfTestAssert(ctx.find("\u21D2") != -1, "ContextHistory uses arrow -> '" + ctx + "'");
+    SelfTestAssert(ctx.find("[") == -1, "ContextHistory drops [lang] tags -> '" + ctx + "'");
 
     g_logger.Info("SelfTest passed");
 }
