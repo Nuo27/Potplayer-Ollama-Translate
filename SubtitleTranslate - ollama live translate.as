@@ -319,6 +319,7 @@ class Config {
     string contextPrompt = CONTEXT_PROMPT_BASE;
     // Cache (Phase 4)
     bool cacheEnabled = false;
+    int cacheMaxEntries = 500;
     // Transport (Phase 2): default false = HostUrlGetString, true = HttpClient (real status codes)
     bool useHttpClient = false;
 
@@ -371,6 +372,122 @@ class ContextHistory {
             historyBlock += history[i] + "\n";
         }
         return historyBlock;
+    }
+}
+
+// ========================
+// TRANSLATION CACHE
+// ========================
+// ponytail: memory cache always active; disk persistence opt-in via
+// Config.cacheEnabled. Key is sha256(text + langs + model) per Q5 — no prompt
+// hash, so editing prompts does NOT invalidate the cache (user's responsibility).
+// Disk backend uses IniFile in the PotPlayer config folder. LRU eviction
+// when maxEntries hit. Concurrency: dictionary ops are short enough to be
+// treated as atomic under AngelScript's single-threaded interpreter.
+
+class TranslationCache {
+    dictionary mem;             // hash -> translated string
+    array<string> lru;          // keys in insertion order, for eviction
+    bool diskEnabled = false;   // snapshot of g_config.cacheEnabled at Load()
+    int maxEntries = 500;       // snapshot of g_config.cacheMaxEntries at Load()
+    string iniFilename = "ollama_tr_cache_v3.ini";
+    string section = "t";
+    bool loaded = false;
+
+    string ComputeKey(const string &in text, const string &in src, const string &in dst, const string &in model) {
+        return HostHashSHA256(text + "|" + src + "|" + dst + "|" + model);
+    }
+
+    bool TryGet(const string &in key, string &out val) {
+        if (!loaded) Load();
+        if (mem.exists(key)) {
+            val = string(mem[key]);
+            return true;
+        }
+        return false;
+    }
+
+    void Set(const string &in key, const string &in val) {
+        if (!loaded) Load();
+        if (mem.exists(key)) {
+            mem[key] = val;
+            return;
+        }
+        if (int(mem.getSize()) >= maxEntries) EvictOldest();
+        mem[key] = val;
+        lru.insertLast(key);
+        if (diskEnabled) Save();
+    }
+
+    void EvictOldest() {
+        if (lru.length() == 0) return;
+        string oldest = lru[0];
+        lru.removeAt(0);
+        mem.delete(oldest);
+    }
+
+    void Load() {
+        loaded = true;
+        diskEnabled = g_config.cacheEnabled;
+        maxEntries = g_config.cacheMaxEntries;
+        if (!diskEnabled) {
+            g_logger.Info("Cache: memory-only mode (disk disabled)");
+            return;
+        }
+
+        IniFile ini;
+        if (!ini.Open(iniFilename)) {
+            g_logger.Info("Cache: no existing disk file, starting fresh");
+            return;
+        }
+        array<string> keys;
+        ini.GetItems(section, keys);
+        for (uint i = 0; i < keys.length(); i++) {
+            string key = keys[i];
+            bool ok = false;
+            string val = ini.GetProfileString(section, key, "", ok);
+            if (ok && !val.empty()) {
+                mem[key] = UnescapeIniValue(val);
+                lru.insertLast(key);
+            }
+        }
+        g_logger.Info("Cache: loaded " + mem.getSize() + " entries from disk");
+    }
+
+    void Save() {
+        if (!diskEnabled) return;
+        IniFile ini;
+        ini.Open(iniFilename);
+        ini.ClearSection(section);
+        for (uint i = 0; i < lru.length(); i++) {
+            string key = lru[i];
+            string val = string(mem[key]);
+            ini.WriteProfileString(section, key, EscapeIniValue(val));
+        }
+        if (!ini.Save(iniFilename)) {
+            g_logger.Warn("Cache: failed to save disk file");
+        }
+    }
+
+    string EscapeIniValue(const string &in s) {
+        // ponytail: INI values don't tolerate newlines/tabs — escape them.
+        // Order matters: backslash must be escaped first (and unescaped last).
+        string r = s;
+        r.replace("\\", "\\\\");
+        r.replace("\n", "\\n");
+        r.replace("\r", "\\r");
+        r.replace("\t", "\\t");
+        return r;
+    }
+
+    string UnescapeIniValue(const string &in s) {
+        // Reverse order of EscapeIniValue
+        string r = s;
+        r.replace("\\t", "\t");
+        r.replace("\\r", "\r");
+        r.replace("\\n", "\n");
+        r.replace("\\\\", "\\");
+        return r;
     }
 }
 
@@ -482,6 +599,7 @@ class Api {
 // ========================
 Config g_config;
 ContextHistory g_contextHistory;
+TranslationCache g_cache;
 Api g_api;
 HttpTransport g_httpTransport;
 TextCleaner g_textCleaner;
@@ -675,6 +793,20 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
     }
 
     string srcLangCode = NormalizeLanguage(SrcLang);
+
+    // Phase 4: cache lookup before sending request.
+    // ponytail: keyed on (text, srcLang, dstLang, model) per Q5. Editing prompts
+    // does NOT invalidate — user's responsibility. Cache hit skips the entire
+    // HTTP round-trip, turning replay/skip-back into ~0ms.
+    string cacheKey = g_cache.ComputeKey(Text, srcLangCode, DstLang, g_config.modelName);
+    string cached;
+    if (g_cache.TryGet(cacheKey, cached)) {
+        g_logger.Debug("Cache hit: " + Text);
+        SrcLang = "UTF8";
+        DstLang = "UTF8";
+        return cached;
+    }
+
     string requestData = g_api.BuildTranslationRequest(Text, srcLangCode, DstLang);
 
     Response resp = g_api.SendTranslationRequest(requestData);
@@ -695,8 +827,11 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
         DstLang = "UTF8";
         return Text;
     }
-    if (DstLang == "fa" || DstLang == "ar" || DstLang == "he") translatedText = "\u202B" + translatedText;
+    if (DstLang == "fa" || DstLang == "ar" || DstLang == "he" || DstLang == "ur" || DstLang == "yi") {
+        translatedText = "\u202B" + translatedText;
+    }
 
+    g_cache.Set(cacheKey, translatedText);
     g_contextHistory.AddEntry(Text, translatedText);
 
     SrcLang = "UTF8";
@@ -837,24 +972,6 @@ string RemoveThinkingTags(const string &in text) {
             cur = closeBracket + 1;
         }
     }
-    return result;
-}
-
-array<string> SplitString(const string &in text, const string &in delimiter) {
-    array<string> result;
-    if (text.empty()) return result;
-
-    int start = 0;
-    int pos = text.findFirst(delimiter, start);
-    while (pos >= 0) {
-        string token = text.substr(uint(start), uint(pos - start));
-        if (!token.empty()) result.insertLast(token);
-        start = pos + int(delimiter.length());
-        pos = text.findFirst(delimiter, start);
-    }
-
-    string token = text.substr(uint(start));
-    if (!token.empty()) result.insertLast(token);
     return result;
 }
 
@@ -1013,6 +1130,42 @@ void SelfTest() {
     string ctx = ch.GetContext();
     SelfTestAssert(ctx.find("\u21D2") != -1, "ContextHistory uses arrow -> '" + ctx + "'");
     SelfTestAssert(ctx.find("[") == -1, "ContextHistory drops [lang] tags -> '" + ctx + "'");
+
+    // === Phase 4: cache ===
+
+    // TranslationCache: standalone instance for testing (don't touch g_cache state)
+    TranslationCache testCache;
+    testCache.loaded = true;        // skip Load() which reads g_config
+    testCache.diskEnabled = false;  // memory-only for tests
+    testCache.maxEntries = 3;
+
+    // ComputeKey: deterministic + input-sensitive
+    string k1 = testCache.ComputeKey("hello", "en", "zh", "qwen3");
+    string k2 = testCache.ComputeKey("hello", "en", "zh", "qwen3");
+    string k3 = testCache.ComputeKey("world", "en", "zh", "qwen3");
+    SelfTestAssert(k1 == k2, "ComputeKey deterministic");
+    SelfTestAssert(k1 != k3, "ComputeKey input-sensitive");
+    SelfTestAssert(k1.length() == 64, "ComputeKey SHA256 length=" + k1.length());
+
+    // Set + TryGet round-trip
+    testCache.Set(k1, "translated_value");
+    string gotVal;
+    SelfTestAssert(testCache.TryGet(k1, gotVal) == true, "TryGet hit after Set");
+    SelfTestAssert(gotVal == "translated_value", "TryGet value matches -> '" + gotVal + "'");
+    SelfTestAssert(testCache.TryGet(k3, gotVal) == false, "TryGet miss for unset key");
+
+    // LRU eviction when maxEntries exceeded
+    testCache.Set("key_a", "a");
+    testCache.Set("key_b", "b");
+    testCache.Set("key_c", "c");  // now at capacity (k1 + 3 = 4, but max is 3, so k1 evicted)
+    SelfTestAssert(testCache.TryGet(k1, gotVal) == false, "LRU evicts oldest entry");
+    SelfTestAssert(testCache.TryGet("key_c", gotVal) == true, "LRU keeps newest entry");
+
+    // EscapeIniValue round-trip with special chars
+    string special = "line1\nline2\ttab\\backslash\rCR";
+    string escaped = testCache.EscapeIniValue(special);
+    string unescaped = testCache.UnescapeIniValue(escaped);
+    SelfTestAssert(unescaped == special, "Ini escape round-trip -> '" + unescaped + "'");
 
     g_logger.Info("SelfTest passed");
 }

@@ -96,6 +96,21 @@
 
 架构级重写，分阶段推进。
 
+#### Phase 4：翻译缓存 + 收尾
+
+- **新增 `TranslationCache`**：基于 sha256(text + srcLang + dstLang + modelName) 的 KV 缓存
+  - **内存缓存始终启用**（即使 `cacheEnabled=false` 也在进程内做命中判断）
+  - **磁盘持久化可选**（`Config.cacheEnabled=true` 时启用）：基于 `IniFile` 在 PotPlayer 配置文件夹生成 `ollama_tr_cache_v3.ini`，重启 PotPlayer 后保留
+  - **LRU 淘汰**：达到 `Config.cacheMaxEntries`（默认 500）时淘汰最旧条目
+  - **值转义**：INI 不容忍换行/制表符，写入前转义、读取后反转义（已通过 SelfTest 验证往返一致性）
+  - **缓存键不含 prompt hash**（Q5 决策）：用户改 prompt 不会自动失效缓存——若需强制刷新，删除 ini 文件或换模型名
+- **`Translate()` 流程接入缓存**：每条字幕先查缓存，命中直接返回（跳过整次 HTTP 往返），未命中走完整 pipeline 后写入
+  - 回放/快退/重复台词 → 零延迟
+  - 云端 API 用户 → 直接省钱
+- **RTL 语言完整化**：补全 `ur`（乌尔都语）、`yi`（意第绪语），与 `fa/ar/he` 一起加 RLM 标记
+- **移除未使用的 `SplitString`**（v2 遗留，Phase 3 删 FormatModelInfo 后失去调用点）
+- SelfTest：41 → 50 条断言（新增 ComputeKey 确定性、Set/TryGet 往返、LRU 淘汰、INI 转义往返）
+
 #### Phase 3：Provider 分裂 + Prompt v3
 
 - **4-mode Provider 矩阵**（基于 customEndpoint 与 apiKey 的存在与否自动判定）：
@@ -135,7 +150,7 @@
 - 新增 `Config.Load()/Save()` 方法集中管理配置读写
 - 修复版本号不一致（`GetVersion()` 现返回 `"3.0"`，与文档/标签对齐）
 
-> Phase 4 将处理：翻译缓存系统。
+> v3.0 四阶段全部完成。如有新需求或问题请提 issue。
 
 ### V2.4 主要更新
 
