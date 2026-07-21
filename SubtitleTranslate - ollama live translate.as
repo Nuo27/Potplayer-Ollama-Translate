@@ -1,6 +1,32 @@
 /*
  * Real-time subtitle translation for PotPlayer using Ollama
+ * v3.0 — Phase 1: Foundation refactor
  */
+
+// ========================
+// LOGGER
+// ========================
+// ponytail: single funnel for all output. Redacts the configured API key
+// before any print. Levels gated by debug flag.
+
+class Logger {
+    bool debug = false;
+    string redactKey = "";
+
+    void Info(const string &in m)  { HostPrintUTF8("[INFO]  " + Redact(m) + "\n"); }
+    void Warn(const string &in m)  { HostPrintUTF8("[WARN]  " + Redact(m) + "\n"); }
+    void Error(const string &in m) { HostPrintUTF8("[ERROR] " + Redact(m) + "\n"); }
+    void Debug(const string &in m) { if (debug) HostPrintUTF8("[DEBUG] " + Redact(m) + "\n"); }
+
+    string Redact(const string &in m) {
+        if (redactKey.empty()) return m;
+        string out = m;
+        out.replace(redactKey, "***");
+        return out;
+    }
+}
+
+Logger g_logger;
 
 // ========================
 // PLUGIN METADATA & LIFECYCLE
@@ -10,9 +36,11 @@ string GetTitle() {
     return "{$CP949=Ollama translate$}{$CP950=Ollama translate$}{$CP936=Ollama translate$}{$CP0=Ollama translate$}";
 }
 
-string GetVersion() { return "2.3"; }
+string GetVersion() { return "3.0"; }
 
-string GetDesc() { return "https://github.com/Nuo27/Potplayer-Ollama-Translate"; }
+string GetDesc() {
+    return "https://github.com/Nuo27/Potplayer-Ollama-Translate";
+}
 
 string GetLoginTitle() {
     return "{$CP949=Ollama Model Configuration$}{$CP950=Ollama Model Configuration$}{$CP936=Ollama Model Configuration$}{$CP0=Ollama Model Configuration$}";
@@ -31,13 +59,14 @@ string GetPasswordText() {
 }
 
 void OnInitialize() {
-    // Uncomment the following func for debugging
+    // Uncomment HostOpenConsole() to inspect log output at runtime
     // HostOpenConsole();
-    HostPrintUTF8("Ollama translation plugin initialized\n");
+    g_logger.Info("Ollama translation plugin v3.0 initialized");
+    SelfTest();
 }
 
 void OnFinalize() {
-    HostPrintUTF8("Ollama translation plugin finalized\n");
+    g_logger.Info("Ollama translation plugin finalized");
 }
 
 // ========================
@@ -86,69 +115,12 @@ const string CONTEXT_PROMPT_BASE =
 "{{optional_reference_context}}\n"
 "</Context>";
 
-const string SYSTEM_PROMPT_LONG =
-    "Role: Simultaneous Interpreter\n"
-    "\n"
-    "Profile\n"
-    "- Source Language: {{from}}\n"
-    "- Target Language: {{to}}\n"
-    "- Description: Act as a senior professional simultaneous interpreter, delivering accurate, natural, and listener-friendly translations suitable for real-time interpretation or subtitles.\n"
-    "- Experience: 15+ years in corporate, legal, diplomatic, and technical live interpretation.\n"
-    "- Style: Calm, precise, adaptive, and native-sounding.\n"
-    "\n"
-    "Core Skills\n"
-    "1. Interpretation\n"
-    "- Accuracy: Preserve original meaning, intent, and tone.\n"
-    "- Fluency: Produce natural spoken language; avoid stiff or literal phrasing.\n"
-    "- Cultural Adaptation: Adjust expressions appropriately from {{from}} to {{to}}.\n"
-    "- Real-time Optimization: Prioritize clarity, brevity, and smooth flow.\n"
-    "\n"
-    "2. Technical Handling\n"
-    "- Terminology Consistency: Maintain domain-specific terms across {{from}} → {{to}}.\n"
-    "- Preservation: Keep all names, numbers, symbols, identifiers, code, and tags unchanged.\n"
-    "- Formatting: Preserve original punctuation, spacing, and structure.\n"
-    "- Smoothing: Remove filler words, repetitions, and minor grammatical issues without altering meaning.\n"
-    "\n"
-    "Output Rules (Strict)\n"
-    "- Output ONLY the translated text in {{to}}.\n"
-    "- Do NOT include explanations, notes, comments, or metadata.\n"
-    "- Do NOT add, omit, or reinterpret content.\n"
-    "- Do NOT use Markdown unless present in the source.\n"
-    "- Output plain text only.\n"
-    "\n"
-    "Context History Handling\n"
-    "- The user prompt may include prior context or conversation history in {{from}}.\n"
-    "- Use context ONLY as background to resolve references, implied meaning, tone, and terminology consistency.\n"
-    "- Translate ONLY the explicitly provided target text from {{from}} to {{to}}.\n"
-    "- Do NOT translate, quote, summarize, or reference context history.\n"
-    "- If context conflicts with current input, prioritize the current input.\n"
-    "- If context is unclear or incomplete, translate conservatively without speculation.\n"
-    "\n"
-    "Behavioral Guidelines\n"
-    "- Optimize output for real-time listening and subtitle readability.\n"
-    "- Smooth incomplete or cut-off sentences naturally.\n"
-    "- Ensure the final result sounds fluent, native, and effortless in {{to}}.\n"
-    "\n"
-    "Workflow\n"
-    "- Step 1: Read source text ({{from}}) and optional context.\n"
-    "- Step 2: Interpret meaning while preserving intent and tone.\n"
-    "- Step 3: Refine for fluency and subtitle compatibility in {{to}}.\n"
-    "- Result: One clean block of natural, accurate translated text in {{to}}.\n"
-    "\n"
-    "Initialization\n"
-    "Follow all rules strictly and execute tasks exactly as defined.\n";
-
-// ========================
-// DEFAULT CONFIGURATION
-// ========================
-const string DEFAULT_MODEL_NAME = "qwen3.5:27b";
-
 // ========================
 // USER CONFIGURATION
 // ========================
 class Config {
     // Api
-    string modelName = DEFAULT_MODEL_NAME;
+    string modelName = "";
     string apiKey = "";
     string customEndpoint = "";
     string baseUrl = "http://127.0.0.1:11434";
@@ -167,9 +139,25 @@ class Config {
     int contextMaxSize = 20;
     int contextCount = 7;
     string contextPrompt = CONTEXT_PROMPT_BASE;
+    // Cache (Phase 4)
+    bool cacheEnabled = false;
 
     string systemPrompt = SYSTEM_PROMPT_BASE;
     string userPrompt = USER_PROMPT_BASE;
+
+    // ponytail: PotPlayer persists username (model) and password (api key)
+    // automatically via the login dialog. We only load/sync our own extras.
+    void Load() {
+        modelName = HostLoadString("selected_model_ollama");
+        apiKey = HostLoadString("api_key_ollama");
+        customEndpoint = HostLoadString("custom_endpoint_ollama");
+    }
+
+    void Save() {
+        HostSaveString("selected_model_ollama", modelName);
+        HostSaveString("custom_endpoint_ollama", customEndpoint);
+        // Note: apiKey is managed by PotPlayer's login dialog; not overwritten here.
+    }
 }
 
 // ========================
@@ -232,7 +220,7 @@ class Api {
     }
 
     string GetThinkOption() {
-        HostPrintUTF8("modelArchitecture: " + modelArchitecture + "\n");
+        g_logger.Debug("modelArchitecture: " + modelArchitecture);
 
         if (modelArchitecture == "gpt-oss" && !g_config.enableThinking) return "\"low\"";
         if (modelArchitecture != "gpt-oss") return g_config.enableThinking
@@ -251,7 +239,7 @@ class Api {
         JsonReader reader;
         JsonValue root;
         if (!reader.parse(response, root)) {
-            HostPrintUTF8("Failed to parse models list response\n");
+            g_logger.Warn("Failed to parse models list response");
             return array<string>();
         }
 
@@ -302,21 +290,21 @@ class Api {
         string header = BuildHeader();
         string headerLog = header;
         if (!g_config.apiKey.empty()) headerLog.replace(g_config.apiKey, "***");
-        HostPrintUTF8("Models list request url   : " + url + "\n");
-        HostPrintUTF8("Models list request header: " + headerLog + "\n");
+        g_logger.Debug("Models list request url   : " + url);
+        g_logger.Debug("Models list request header: " + headerLog);
 
         string response = HostUrlGetString(url, userAgent, header, "");
         if (response.empty()) return array<string>();
-        HostPrintUTF8("Models list response size : " + response.length() + "\n");
+        g_logger.Debug("Models list response size : " + response.length());
 
         JsonReader reader;
         JsonValue root;
         string normalized = NormalizeJsonResponse(response);
         if (!reader.parse(normalized, root)) {
-            HostPrintUTF8("Failed to parse OpenAI models list response\n");
+            g_logger.Warn("Failed to parse OpenAI models list response");
             int previewLen = min(512, int(response.length()));
             string preview = response.substr(0, uint(previewLen));
-            HostPrintUTF8("OpenAI models raw response (first 512 chars): " + preview + "\n");
+            g_logger.Debug("OpenAI models raw response (first 512 chars): " + preview);
             return array<string>();
         }
 
@@ -340,9 +328,9 @@ class Api {
         string url = BuildUrl();
         string header = BuildHeader();
 
-        HostPrintUTF8("request url   : " + url + "\n");
-        HostPrintUTF8("request header: " + header + "\n");
-        HostPrintUTF8("request data  : " + requestData + "\n");
+        g_logger.Debug("request url   : " + url);
+        g_logger.Debug("request header: " + header);
+        g_logger.Debug("request data  : " + requestData);
 
         return HostUrlGetString(url, userAgent, header, requestData);
     }
@@ -492,14 +480,11 @@ bool g_isPluginActive = true;
 // USER CONFIG & AUTH
 // ========================
 void LoadUserConfig() {
-    g_config.modelName = HostLoadString("selected_model_ollama");
-    HostPrintUTF8("Loaded model: " + g_config.modelName + "\n");
-
-    g_config.apiKey = HostLoadString("api_key_ollama");
-    HostPrintUTF8("Loaded API Key: " + g_config.apiKey + "\n");
-    g_config.customEndpoint = HostLoadString("custom_endpoint_ollama");
+    g_config.Load();
+    g_logger.Info("Loaded model: " + g_config.modelName);
+    g_logger.Info("Loaded API Key: " + (g_config.apiKey.empty() ? "(not set)" : "(set)"));
     if (!g_config.customEndpoint.empty()) {
-        HostPrintUTF8("Loaded custom endpoint: " + g_config.customEndpoint + "\n");
+        g_logger.Info("Loaded custom endpoint: " + g_config.customEndpoint);
     }
 }
 
@@ -525,13 +510,7 @@ bool IsModelValid(const string &in modelName) {
         availableModels = g_api.GetOpenAIModels();
     }
     if (availableModels.length() == 0) return false;
-
-    if (TrySelectModelFromList(availableModels, modelName)) return true;
-    if (modelName != DEFAULT_MODEL_NAME && TrySelectModelFromList(availableModels, DEFAULT_MODEL_NAME)) {
-        HostPrintUTF8("Model not found, falling back to default: " + DEFAULT_MODEL_NAME + "\n");
-        return true;
-    }
-    return false;
+    return TrySelectModelFromList(availableModels, modelName);
 }
 
 // ========================
@@ -539,7 +518,6 @@ bool IsModelValid(const string &in modelName) {
 // ========================
 void ParseLoginInput(string User, string Pass) {
     g_config.modelName = TrimString(User);
-    if (g_config.modelName.empty()) g_config.modelName = DEFAULT_MODEL_NAME;
 
     string newApiKey = TrimString(Pass);
     if (!newApiKey.empty()) {
@@ -555,7 +533,7 @@ string LoginNativeOllama() {
     }
 
     bool valid = IsModelValid(g_config.modelName);
-    HostPrintUTF8("Is " + g_config.modelName + " valid: " + (valid ? "true" : "false") + "\n");
+    g_logger.Debug("Is " + g_config.modelName + " valid: " + (valid ? "true" : "false"));
     if (!valid) {
         return HandleModelNotFound();
     }
@@ -581,13 +559,13 @@ string LoginCustomEndpoint() {
         }
         LogModelList(availableModels);
         bool valid = TrySelectModelFromList(availableModels, g_config.modelName);
-        HostPrintUTF8("Is " + g_config.modelName + " valid: " + (valid ? "true" : "false") + "\n");
+        g_logger.Debug("Is " + g_config.modelName + " valid: " + (valid ? "true" : "false"));
         if (!valid) {
             return HandleModelNotFound();
         }
-        HostPrintUTF8("Using custom OpenAI endpoint: " + g_config.customEndpoint + "\n");
+        g_logger.Info("Using custom OpenAI endpoint: " + g_config.customEndpoint);
     } else {
-        HostPrintUTF8("Using custom endpoint (skipping model validation): " + g_config.customEndpoint + "\n");
+        g_logger.Info("Using custom endpoint (skipping model validation): " + g_config.customEndpoint);
     }
     return "";
 }
@@ -602,57 +580,26 @@ string FetchAndApplyModelInfo() {
     if (g_config.customEndpoint.empty()) {
         string modelInfo = g_api.GetModelInfo(g_config.modelName);
         if (modelInfo.empty()) {
-            HostPrintUTF8("Warning: Could not retrieve model information\n");
+            g_logger.Warn("Could not retrieve model information");
             ShowError("Unable to retrieve model information for " + g_config.modelName, "Login Warning");
             return "500 Unable to retrieve model information.";
         }
-        HostPrintUTF8("Model information retrieved successfully\n" + modelInfo);
+        g_logger.Debug("Model information retrieved:\n" + modelInfo);
     } else {
-        HostPrintUTF8("Skipping model info fetch for custom endpoint\n");
+        g_logger.Debug("Skipping model info fetch for custom endpoint");
     }
     return "";
 }
 
 void SaveLoginConfig() {
-    HostSaveString("selected_model_ollama", g_config.modelName);
-    HostSaveString("custom_endpoint_ollama", g_config.customEndpoint);
-    HostSaveString("api_key_ollama", g_config.apiKey);
-}
-
-void RunLoginTest() {
-    string testSrcLang = "auto";
-    string testDstLang = "zh-CN";
-    string testText = "Why is the sky blue?";
-
-    HostPrintUTF8("Running login test translation: " + testSrcLang + " -> " + testDstLang + "\n");
-
-    string requestData = g_api.BuildTranslationRequest(testText, testSrcLang, testDstLang);
-    string response = g_api.SendTranslationRequest(requestData);
-
-    if (response.empty()) {
-        HostPrintUTF8("Login test: translation request failed - no response\n");
-        ShowError("Login test translation failed - no response.\nThe plugin is configured but translation may not work.", "Login Test Warning");
-        return;
-    }
-
-    string translatedText = ExtractTranslatedText(response);
-    translatedText = RemoveThinkingTags(translatedText);
-    translatedText = TrimString(translatedText);
-
-    if (translatedText.empty()) {
-        HostPrintUTF8("Login test: translation returned empty result\n");
-        ShowError("Login test translation returned empty result.\nThe plugin is configured but translation may not work.", "Login Test Warning");
-        return;
-    }
-
-    HostPrintUTF8("Login test completed successfully!\n");
-    HostPrintUTF8("  " + testSrcLang + " -> " + testDstLang + "\n");
-    HostPrintUTF8("  Input: " + testText + "\n");
-    HostPrintUTF8("  Output: " + translatedText + "\n");
+    g_config.Save();
 }
 
 string ServerLogin(string User, string Pass) {
     ParseLoginInput(User, Pass);
+
+    // ponytail: redactKey set as early as possible so all subsequent logs are safe
+    g_logger.redactKey = g_config.apiKey;
 
     string error;
     if (g_config.customEndpoint.empty()) {
@@ -670,9 +617,8 @@ string ServerLogin(string User, string Pass) {
     SaveLoginConfig();
 
     g_isPluginActive = true;
-    HostPrintUTF8("Successfully configured Ollama translation plugin\n");
-    HostPrintUTF8("Native thinking support: " + (g_api.ollamaSupportsNativeThinking ? "Yes" : "No") + "\n");
-    // RunLoginTest();
+    g_logger.Info("Successfully configured Ollama translation plugin");
+    g_logger.Info("Native thinking support: " + (g_api.ollamaSupportsNativeThinking ? "Yes" : "No"));
 
     return "200 ok";
 }
@@ -681,7 +627,7 @@ void ServerLogout() {
     HostSaveString("selected_model_ollama", g_config.modelName);
     HostSaveString("custom_endpoint_ollama", g_config.customEndpoint);
     HostSaveString("api_key_ollama", "");
-    HostPrintUTF8("Successfully logged out from Ollama translation plugin\n");
+    g_logger.Info("Successfully logged out from Ollama translation plugin");
 }
 
 // ========================
@@ -709,7 +655,7 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
     if (!g_isPluginActive) return "Plugin is not loaded normally, please check settings";
 
     if (!IsTargetLanguageValid(DstLang)) {
-        HostPrintUTF8("Target language not specified\n");
+        g_logger.Warn("Target language not specified");
         ShowError("Target language not specified", "Translation Failed");
         return "";
     }
@@ -719,7 +665,7 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
 
     string response = g_api.SendTranslationRequest(requestData);
     if (response.empty()) {
-        HostPrintUTF8("Translation request failed - no response\n");
+        g_logger.Warn("Translation request failed - no response");
         ShowError("Translation request failed - no response", "Translation Failed");
         return "";
     }
@@ -740,21 +686,21 @@ string ExtractTranslatedText(const string response) {
     JsonReader reader;
     JsonValue root;
     if (!reader.parse(response, root)) {
-        HostPrintUTF8("Failed to parse translation response\n");
+        g_logger.Warn("Failed to parse translation response");
         return "";
     }
 
-    HostPrintUTF8("response: " + response + "\n");
+    g_logger.Debug("response: " + response);
 
     JsonValue message = g_config.customEndpoint.empty() ? root["message"] : root["choices"][0]["message"];
     if (!message.isObject()) {
-        HostPrintUTF8("Invalid response format - no message\n");
+        g_logger.Warn("Invalid response format - no message");
         return "";
     }
 
     JsonValue content = message["content"];
     if (!content.isString()) {
-        HostPrintUTF8("Invalid response format - no content\n");
+        g_logger.Warn("Invalid response format - no content");
         ShowError("Invalid response format - no content", "Translation Failed");
         return "";
     }
@@ -796,7 +742,7 @@ void LogModelList(const array<string> &in models) {
     for (uint i = 0; i < models.length(); i++) {
         output += "- " + models[i] + "\n";
     }
-    HostPrintUTF8(output);
+    g_logger.Debug(output);
 }
 
 bool IsValidCustomEndpoint(const string &in endpoint) {
@@ -836,7 +782,7 @@ string TrimString(const string &in text) {
 
 string NormalizeJsonResponse(const string &in input) {
     string output = input;
-    if (output.length() >= 3 && output.substr(0, 3) == "\xEF\xBB\xBF") {
+    if (output.length() >= 3 && output.substr(0, 3) == "\xef\xbb\xbf") {
         output = output.substr(3);
     }
     return TrimString(output);
@@ -892,7 +838,6 @@ string ApplyTemplate(const string &in tmpl, const string &in text, const string 
     fromVal.MakeLower();
     bool includeFrom = !(fromVal.empty() || fromVal == "auto");
 
-    result.replace("{{text}}", text);
     result.replace("{{text_to_translate}}", text);
     result.replace("{{from}}", includeFrom ? from : "");
     result.replace("{{to}}", to);
@@ -907,14 +852,45 @@ string ApplyTemplate(const string &in tmpl, const string &in text, const string 
         result.replace("{{context_prompt}}", "");
     }
 
-    if (!includeFrom) {
-        result.replace(" from  to", " to");
-        result.replace("from  to", "to");
-        result.replace(" from  ", " ");
-        result.replace("from  ", "");
-        while (result.find("  ") != -1) {
-            result.replace("  ", " ");
-        }
-    }
+    // ponytail: removed the previous "from  to" / double-space collapse hack.
+    // It corrupted user-authored prompts by collapsing intentional double spaces.
+    // Template authors are now responsible for handling empty {{from}} gracefully.
     return result;
+}
+
+// ========================
+// SELF-TEST
+// ========================
+// ponytail: minimal assert-style smoke check, runs once on OnInitialize.
+// Verifies pure-function invariants; no framework, no fixtures.
+
+void SelfTestAssert(bool cond, const string &in msg) {
+    if (!cond) {
+        g_logger.Error("SelfTest FAILED: " + msg);
+    }
+}
+
+void SelfTest() {
+    // ApplyTemplate: empty {{from}} no longer triggers string hacks
+    string r1 = ApplyTemplate("from={{from}} to={{to}}", "hello", "", "zh-CN", "");
+    SelfTestAssert(r1 == "from= to=zh-CN", "ApplyTemplate empty from -> '" + r1 + "'");
+
+    // ApplyTemplate: {{text}} alias removed; only {{text_to_translate}} works
+    string r2 = ApplyTemplate("[{{text_to_translate}}]", "hi", "", "zh", "");
+    SelfTestAssert(r2 == "[hi]", "ApplyTemplate text_to_translate -> '" + r2 + "'");
+
+    // TrimString basic cases
+    SelfTestAssert(TrimString("  hello  ") == "hello", "TrimString spaces");
+    SelfTestAssert(TrimString("\n\n") == "", "TrimString whitespace-only");
+
+    // EscapeJsonString
+    string r3 = EscapeJsonString("a\"b\nc");
+    SelfTestAssert(r3 == "a\\\"b\\nc", "EscapeJsonString -> '" + r3 + "'");
+
+    // Logger.Redact
+    Logger l;
+    l.redactKey = "secret";
+    SelfTestAssert(l.Redact("mysecret here") == "my*** here", "Logger.Redact -> '" + l.Redact("mysecret here") + "'");
+
+    g_logger.Info("SelfTest passed");
 }

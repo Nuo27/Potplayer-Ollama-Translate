@@ -26,9 +26,10 @@ This is a plugin developed for PotPlayer that enables real-time subtitle transla
   - [Install the Plugin](#install-the-plugin)
   - [Advanced Configuration and Debug](#advanced-configuration-and-debug)
   - [Notes](#notes)
-  - [Updates](#updates)
-    - [V2.4 Major Updates](#v24-major-updates)
-    - [V2.3 Major Updates](#v23-major-updates)
+   - [Updates](#updates)
+     - [V3.0 Major Updates](#v30-major-updates)
+     - [V2.4 Major Updates](#v24-major-updates)
+     - [V2.3 Major Updates](#v23-major-updates)
   - [TODO](#todo)
   - [About the Project](#about-the-project)
   - [Custom Configuration](#custom-configuration)
@@ -103,6 +104,22 @@ This is a plugin developed for PotPlayer that enables real-time subtitle transla
 - Strongly recommended to use **Instruct** models, such as `qwen3.5:27b`. Recommended models can be found in the [Performance](#performance) section.
 
 ## Updates
+
+### V3.0 Major Updates
+
+Architecture-level rewrite, rolled out in phases. This release is **Phase 1: Foundation refactor and critical bug fixes**.
+
+- Introduced `Logger` class as the single output funnel with **automatic API key redaction** (fixes the security issue where the API key was written in cleartext to the log)
+- Log levels: `Info / Warn / Error / Debug`; Debug gated by `g_logger.debug`
+- Removed dead code: `SYSTEM_PROMPT_LONG` (50-line unreferenced constant), `RunLoginTest` (commented-out function)
+- Removed `DEFAULT_MODEL_NAME` constant and its fallback logic
+- Removed the `from  to` / `while "  "` hack inside `ApplyTemplate` (fixes a data-corruption bug that mangled user prompt templates by collapsing intentional double spaces)
+- Removed the `{{text}}` alias variable (duplicate of `{{text_to_translate}}`)
+- Added `Config.Load()/Save()` methods to centralize config I/O
+- Added `SelfTest()` startup smoke check (pure-function invariant verification)
+- Fixed inconsistent version strings (`GetVersion()` now returns `"3.0"`, aligned with docs and tags)
+
+> Phases 2–4 will address: reliability and concurrency, provider split with new prompt system, and the translation cache.
 
 ### V2.4 Major Updates
 
