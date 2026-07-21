@@ -109,6 +109,21 @@ This is a plugin developed for PotPlayer that enables real-time subtitle transla
 
 Architecture-level rewrite, rolled out in phases.
 
+#### Phase 4: Translation cache + polish
+
+- **New `TranslationCache`**: KV cache keyed on sha256(text + srcLang + dstLang + modelName)
+  - **Memory cache always active** (even when `cacheEnabled=false`, in-process hits still work)
+  - **Optional disk persistence** (`Config.cacheEnabled=true`): uses `IniFile` in the PotPlayer config folder, writing `ollama_tr_cache_v3.ini` so entries survive PotPlayer restart
+  - **LRU eviction**: when `Config.cacheMaxEntries` (default 500) is hit, the oldest entry is dropped
+  - **Value escaping**: INI files don't tolerate newlines/tabs — values are escaped on write and unescaped on read (round-trip verified by SelfTest)
+  - **Cache key does NOT include prompt hash** (per Q5): editing prompts does NOT auto-invalidate the cache — to force a refresh, delete the ini file or change the model name
+- **`Translate()` pipeline now consults the cache**: every subtitle first does a lookup; on hit the entire HTTP round-trip is skipped, on miss the full pipeline runs and the result is stored
+  - Replay / skip-back / repeated lines → effectively zero latency
+  - Cloud API users → direct cost savings
+- **RTL language list completed**: added `ur` (Urdu) and `yi` (Yiddish), joining `fa/ar/he` for the RLM marker injection
+- **Removed unused `SplitString`** (v2 leftover; lost its callers when Phase 3 deleted FormatModelInfo)
+- SelfTest: 41 → 50 assertions (new coverage for ComputeKey determinism, Set/TryGet round-trip, LRU eviction, INI escape round-trip)
+
 #### Phase 3: Provider split + Prompt v3
 
 - **4-mode Provider matrix** (auto-detected from customEndpoint + apiKey presence):
@@ -148,7 +163,7 @@ Architecture-level rewrite, rolled out in phases.
 - Added `Config.Load()/Save()` methods to centralize config I/O
 - Fixed inconsistent version strings (`GetVersion()` now returns `"3.0"`, aligned with docs and tags)
 
-> Phase 4 will address: translation cache system.
+> v3.0 all four phases complete. For new requests or issues please open an issue.
 
 ### V2.4 Major Updates
 
