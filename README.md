@@ -94,19 +94,32 @@
 
 ### V3.0 主要更新
 
-架构级重写，分阶段推进。本阶段为 **Phase 1：基础重构与关键 Bug 修复**。
+架构级重写，分阶段推进。
+
+#### Phase 2：稳定性与并发
+
+- 引入 `Response` 类型（`status` + `body`），全链路传递 HTTP 状态码（修 C3）
+- 引入 `HttpTransport` 类，**双实现并存**：默认 `HostUrlGetString`，开启 `Config.useHttpClient` 切换到 `HttpClient`（拿到真实 status code）
+- 关键路径主动调用 `HostIncTimeOut(15000)`，避免 LLM 长响应被 PotPlayer 强杀
+- 引入 `RetryPolicy`（并入 `HttpTransport.SendWithRetry`）：网络层失败 / 5xx / 429 自动重试 1 次，500ms backoff；4xx 不重试
+- 引入 `TextCleaner.IsTranslatable`：跳过空 / 纯数字 / 纯标点输入，节省 API 调用
+- 重写 `RemoveThinkingTags`（修 C2）：扫描式实现，正确处理 `<think attr="x">` / `<thinking>` / 多个连续标签 / 未闭合标签
+- **失败时返回原文而非空字幕**（修 H7）：网络抖动、限流、模型卡顿时用户仍能看到原字幕
+- `ContextHistory` 加并发说明：快照-then-追加模式，无锁但临界区极短
+
+#### Phase 1：基础重构与关键 Bug 修复
 
 - 引入 `Logger` 类，统一日志出口，**自动脱敏 API Key**（修复 API Key 明文写入日志的安全问题）
 - 日志分级：`Info / Warn / Error / Debug`，Debug 由 `g_logger.debug` 开关控制
 - 移除死代码：`SYSTEM_PROMPT_LONG`（50 行未引用常量）、`RunLoginTest`（已注释函数）
-- 移除 `DEFAULT_MODEL_NAME` 常量及其 fallback 逻辑（与 Q6 决策一致）
+- 移除 `DEFAULT_MODEL_NAME` 常量及其 fallback 逻辑
 - 移除 `ApplyTemplate` 中的 `from  to` / `while "  "` hack（修复误改用户 prompt 模板的数据损坏 bug）
 - 移除 `{{text}}` 别名变量（与 `{{text_to_translate}}` 重复，统一用后者）
 - 新增 `Config.Load()/Save()` 方法集中管理配置读写
-- 新增 `SelfTest()` 启动自检（纯函数 invariant 验证）
+- 新增 `SelfTest()` 启动自检（纯函数 invariant 验证，覆盖 26 条断言）
 - 修复版本号不一致（`GetVersion()` 现返回 `"3.0"`，与文档/标签对齐）
 
-> Phase 2–4 将分别处理：稳定性与并发、Provider 分裂与新 Prompt 体系、缓存系统。
+> Phase 3–4 将分别处理：Provider 分裂与新 Prompt 体系、缓存系统。
 
 ### V2.4 主要更新
 
