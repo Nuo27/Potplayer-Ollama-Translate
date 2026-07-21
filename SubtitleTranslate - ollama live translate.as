@@ -116,6 +116,111 @@ const string CONTEXT_PROMPT_BASE =
 "</Context>";
 
 // ========================
+// HTTP RESPONSE
+// ========================
+// ponytail: simple value carrier. status=0 means network-layer failure
+// (connection refused, timeout, DNS, etc.); otherwise the HTTP status code.
+
+class Response {
+    int status = 0;
+    string body = "";
+}
+
+// ========================
+// TEXT CLEANER
+// ========================
+// ponytail: input normalization + noise filter. Skips empty/numeric/punctuation-only
+// inputs so we don't waste an API call on "..." or "123".
+
+class TextCleaner {
+    string Normalize(const string &in t) {
+        string s = TrimString(t);
+        // Collapse internal whitespace runs (input text only, not user prompts)
+        while (s.find("  ") != -1) s.replace("  ", " ");
+        return s;
+    }
+
+    bool IsTranslatable(const string &in t) {
+        string s = TrimString(t);
+        if (s.empty()) return false;
+
+        // ponytail: skip set covers ASCII whitespace/digits/punctuation.
+        // Any character outside this set (ASCII letter or non-ASCII byte from
+        // a multibyte UTF-8 sequence) counts as translatable content.
+        string skipChars = " .,;:!?\"'-()[]{}<>/*+=~`@#$%^&|\\\n\r\t";
+        uint len = s.length();
+        for (uint i = 0; i < len; i++) {
+            string ch = s.substr(i, 1);
+            if (ch >= "0" && ch <= "9") continue;
+            if (skipChars.find(ch) != -1) continue;
+            return true;
+        }
+        return false;
+    }
+}
+
+// ========================
+// HTTP TRANSPORT
+// ========================
+// ponytail: dual impl per Q9. Default uses HostUrlGetString (status unknown,
+// heuristic from body emptiness); flip Config.useHttpClient to use the
+// HttpClient class which exposes real HTTP status codes.
+// SendWithRetry does at most ONE retry on transient errors (network failure,
+// 5xx, 429). 4xx is not retried (auth / bad request — retry won't help).
+
+class HttpTransport {
+    string userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
+
+    Response SendWithRetry(const string &in url, const string &in header, const string &in body) {
+        Response r = Send(url, header, body);
+        if (ShouldRetry(r)) {
+            g_logger.Warn("Transient failure (status=" + r.status + "), retrying once...");
+            HostSleep(500);
+            r = Send(url, header, body);
+        }
+        return r;
+    }
+
+    Response Send(const string &in url, const string &in header, const string &in body) {
+        if (g_config.useHttpClient) return SendViaHttpClient(url, header, body);
+        return SendViaHostUrlGetString(url, header, body);
+    }
+
+    Response SendViaHostUrlGetString(const string &in url, const string &in header, const string &in body) {
+        HostIncTimeOut(15000);  // give the LLM time to respond (fixes C3)
+        Response r;
+        string bodyOut = HostUrlGetString(url, userAgent, header, body);
+        r.body = bodyOut;
+        // Heuristic: HostUrlGetString does not expose HTTP status. Treat empty
+        // body as network-layer failure, non-empty as assumed 200.
+        r.status = bodyOut.empty() ? 0 : 200;
+        return r;
+    }
+
+    Response SendViaHttpClient(const string &in url, const string &in header, const string &in body) {
+        HostIncTimeOut(15000);
+        Response r;
+        HttpClient client;
+        bool ok = client.Open(url, userAgent, header, body, true);
+        if (!ok) {
+            r.status = 0;
+            r.body = "";
+            return r;
+        }
+        r.status = client.GetStatus();
+        r.body = client.GetContent();
+        return r;
+    }
+
+    bool ShouldRetry(const Response &in r) {
+        if (r.status == 0) return true;        // network layer failure
+        if (r.status >= 500) return true;      // server error
+        if (r.status == 429) return true;      // rate limited
+        return false;                          // 4xx = auth / bad request
+    }
+}
+
+// ========================
 // USER CONFIGURATION
 // ========================
 class Config {
@@ -141,6 +246,8 @@ class Config {
     string contextPrompt = CONTEXT_PROMPT_BASE;
     // Cache (Phase 4)
     bool cacheEnabled = false;
+    // Transport (Phase 2): default false = HostUrlGetString, true = HttpClient (real status codes)
+    bool useHttpClient = false;
 
     string systemPrompt = SYSTEM_PROMPT_BASE;
     string userPrompt = USER_PROMPT_BASE;
@@ -163,6 +270,12 @@ class Config {
 // ========================
 // CONTEXT HISTORY
 // ========================
+// ponytail: no mutex primitives in AngelScript; Translate() may fire concurrently
+// (Q2). Mitigation: GetContext() returns a complete string snapshot, AddEntry()
+// is a short append+trim. Snapshot is taken before the HTTP call so concurrent
+// translators never read partial state; final ordering of appends depends on
+// completion order, which is acceptable for tone/continuity context.
+
 class ContextHistory {
     array<string> history;
 
@@ -324,7 +437,7 @@ class Api {
         return !version.empty() && CompareVersion(version, "0.9.0") >= 0;
     }
 
-    string SendTranslationRequest(const string &in requestData) {
+    Response SendTranslationRequest(const string &in requestData) {
         string url = BuildUrl();
         string header = BuildHeader();
 
@@ -332,7 +445,7 @@ class Api {
         g_logger.Debug("request header: " + header);
         g_logger.Debug("request data  : " + requestData);
 
-        return HostUrlGetString(url, userAgent, header, requestData);
+        return g_httpTransport.SendWithRetry(url, header, requestData);
     }
 
     string BuildTranslationRequest(const string &in text, const string &in srcLang, const string &in dstLang) {
@@ -474,6 +587,8 @@ class Api {
 Config g_config;
 ContextHistory g_contextHistory;
 Api g_api;
+HttpTransport g_httpTransport;
+TextCleaner g_textCleaner;
 bool g_isPluginActive = true;
 
 // ========================
@@ -660,19 +775,38 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
         return "";
     }
 
+    // Phase 2: skip noise input so we don't waste an API call on "" / "..." / "123"
+    if (!g_textCleaner.IsTranslatable(Text)) {
+        g_logger.Debug("Skipping non-translatable input: " + Text);
+        SrcLang = "UTF8";
+        DstLang = "UTF8";
+        return Text;
+    }
+
     string srcLangCode = NormalizeLanguage(SrcLang);
     string requestData = g_api.BuildTranslationRequest(Text, srcLangCode, DstLang);
 
-    string response = g_api.SendTranslationRequest(requestData);
-    if (response.empty()) {
-        g_logger.Warn("Translation request failed - no response");
-        ShowError("Translation request failed - no response", "Translation Failed");
-        return "";
+    Response resp = g_api.SendTranslationRequest(requestData);
+    if (resp.status == 0 || resp.body.empty()) {
+        // Phase 2 (H7): return original text instead of empty string.
+        // User sees the source line rather than a blank subtitle — much better UX
+        // under network blips / model load stalls / rate limits.
+        g_logger.Warn("Translation failed (status=" + resp.status + "): " + Text);
+        SrcLang = "UTF8";
+        DstLang = "UTF8";
+        return Text;
     }
 
-    string translatedText = ExtractTranslatedText(response);
+    string translatedText = ExtractTranslatedText(resp.body);
     translatedText = RemoveThinkingTags(translatedText);
     translatedText = TrimString(translatedText);
+    if (translatedText.empty()) {
+        // API responded but content was empty/unparsable — still better than blank
+        g_logger.Warn("Translation returned empty content: " + Text);
+        SrcLang = "UTF8";
+        DstLang = "UTF8";
+        return Text;
+    }
     if (DstLang == "fa" || DstLang == "ar" || DstLang == "he") translatedText = "\u202B" + translatedText;
 
     g_contextHistory.AddEntry(Text, translatedText, srcLangCode, DstLang);
@@ -799,17 +933,36 @@ string EscapeJsonString(const string &in input) {
 }
 
 string RemoveThinkingTags(const string &in text) {
-    string result = text;
-    int startPos = 0;
-    while (true) {
-        int openPos = result.find("<think", startPos);
-        if (openPos == -1) break;
-
-        int closePos = result.find("</think", openPos);
-        if (closePos == -1) break;
-
-        result = result.substr(0, openPos) + result.substr(closePos + 8);
-        startPos = openPos;
+    // Phase 2 (fixes C2): proper scan-based removal.
+    // - Handles <think>, <think attr="x">, <thinking> (matched via "<think" prefix)
+    // - Handles </think>, </thinking> (matched via "</think" prefix)
+    // - Unclosed <think>...</text without close>: discards the trailing content
+    //   (likely truncated chain-of-thought, better to drop than show)
+    // - Multiple sequential tags handled by the loop
+    string result = "";
+    int cur = 0;
+    int totalLen = int(text.length());
+    while (cur < totalLen) {
+        int openPos = text.find("<think", cur);
+        if (openPos == -1) {
+            result += text.substr(uint(cur));
+            break;
+        }
+        // Append text before the open tag
+        result += text.substr(uint(cur), uint(openPos - cur));
+        // Find closing "</think" prefix
+        int closePos = text.find("</think", openPos);
+        if (closePos == -1) {
+            // Unclosed thinking block — discard the rest
+            break;
+        }
+        // Advance past the closing tag's ">" (handles "</think>", "</thinking>", "</think attr>")
+        int closeBracket = text.find(">", closePos);
+        if (closeBracket == -1) {
+            cur = closePos + 7;  // skip past "</think" even if ">" missing
+        } else {
+            cur = closeBracket + 1;
+        }
     }
     return result;
 }
@@ -891,6 +1044,46 @@ void SelfTest() {
     Logger l;
     l.redactKey = "secret";
     SelfTestAssert(l.Redact("mysecret here") == "my*** here", "Logger.Redact -> '" + l.Redact("mysecret here") + "'");
+
+    // RemoveThinkingTags (Phase 2, C2 fix)
+    string t1 = RemoveThinkingTags("<think>reasoning here</think>hello");
+    SelfTestAssert(t1 == "hello", "RemoveThinkingTags basic -> '" + t1 + "'");
+    string t2 = RemoveThinkingTags("before<think>coT</think>middle<think>more</think>after");
+    SelfTestAssert(t2 == "beforemiddleafter", "RemoveThinkingTags multi -> '" + t2 + "'");
+    string t3 = RemoveThinkingTags("<think attr=\"x\">tagged open</think>ok");
+    SelfTestAssert(t3 == "ok", "RemoveThinkingTags attr open -> '" + t3 + "'");
+    string t4 = RemoveThinkingTags("<thinking>unclosed block");
+    SelfTestAssert(t4 == "", "RemoveThinkingTags unclosed -> '" + t4 + "'");
+    string t5 = RemoveThinkingTags("no tags here");
+    SelfTestAssert(t5 == "no tags here", "RemoveThinkingTags no tags -> '" + t5 + "'");
+
+    // TextCleaner.IsTranslatable (Phase 2)
+    TextCleaner tc;
+    SelfTestAssert(tc.IsTranslatable("") == false, "IsTranslatable empty");
+    SelfTestAssert(tc.IsTranslatable("   ") == false, "IsTranslatable whitespace");
+    SelfTestAssert(tc.IsTranslatable("...") == false, "IsTranslatable punctuation");
+    SelfTestAssert(tc.IsTranslatable("123") == false, "IsTranslatable digits");
+    SelfTestAssert(tc.IsTranslatable("-") == false, "IsTranslatable single char");
+    SelfTestAssert(tc.IsTranslatable("hello") == true, "IsTranslatable ascii word");
+    SelfTestAssert(tc.IsTranslatable("Hello, world!") == true, "IsTranslatable sentence");
+
+    // Response default state
+    Response r;
+    SelfTestAssert(r.status == 0, "Response default status");
+    SelfTestAssert(r.body == "", "Response default body");
+
+    // HttpTransport.ShouldRetry logic
+    HttpTransport ht;
+    Response fail;  fail.status = 0;    fail.body = "";
+    Response ok;    ok.status = 200;    ok.body = "{}";
+    Response err5;  err5.status = 500;  err5.body = "";
+    Response rl;    rl.status = 429;    rl.body = "";
+    Response auth;  auth.status = 401;  auth.body = "";
+    SelfTestAssert(ht.ShouldRetry(fail) == true, "ShouldRetry network failure");
+    SelfTestAssert(ht.ShouldRetry(ok) == false, "ShouldRetry 200");
+    SelfTestAssert(ht.ShouldRetry(err5) == true, "ShouldRetry 5xx");
+    SelfTestAssert(ht.ShouldRetry(rl) == true, "ShouldRetry 429");
+    SelfTestAssert(ht.ShouldRetry(auth) == false, "ShouldRetry 401");
 
     g_logger.Info("SelfTest passed");
 }

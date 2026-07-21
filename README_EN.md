@@ -107,7 +107,20 @@ This is a plugin developed for PotPlayer that enables real-time subtitle transla
 
 ### V3.0 Major Updates
 
-Architecture-level rewrite, rolled out in phases. This release is **Phase 1: Foundation refactor and critical bug fixes**.
+Architecture-level rewrite, rolled out in phases.
+
+#### Phase 2: Reliability and Concurrency
+
+- Introduced `Response` type (`status` + `body`) propagated through the chain (fixes C3)
+- Introduced `HttpTransport` class with **dual implementations**: default uses `HostUrlGetString`, flip `Config.useHttpClient` to switch to `HttpClient` (real status codes)
+- Hot path calls `HostIncTimeOut(15000)` proactively so long LLM responses don't get killed by PotPlayer
+- Introduced `RetryPolicy` (folded into `HttpTransport.SendWithRetry`): one automatic retry on network failure / 5xx / 429 with 500ms backoff; 4xx is not retried
+- Introduced `TextCleaner.IsTranslatable`: skip empty / digit-only / punctuation-only inputs, saving API calls
+- Rewrote `RemoveThinkingTags` (fixes C2): scan-based implementation correctly handles `<think attr="x">` / `<thinking>` / multiple sequential tags / unclosed tags
+- **Failure now returns the original text instead of an empty subtitle** (fixes H7): under network blips, rate limits, or model stalls the user still sees the source line
+- Added concurrency note to `ContextHistory`: snapshot-then-append pattern, lock-free but minimal critical section
+
+#### Phase 1: Foundation refactor and critical bug fixes
 
 - Introduced `Logger` class as the single output funnel with **automatic API key redaction** (fixes the security issue where the API key was written in cleartext to the log)
 - Log levels: `Info / Warn / Error / Debug`; Debug gated by `g_logger.debug`
@@ -116,10 +129,10 @@ Architecture-level rewrite, rolled out in phases. This release is **Phase 1: Fou
 - Removed the `from  to` / `while "  "` hack inside `ApplyTemplate` (fixes a data-corruption bug that mangled user prompt templates by collapsing intentional double spaces)
 - Removed the `{{text}}` alias variable (duplicate of `{{text_to_translate}}`)
 - Added `Config.Load()/Save()` methods to centralize config I/O
-- Added `SelfTest()` startup smoke check (pure-function invariant verification)
+- Added `SelfTest()` startup smoke check (pure-function invariant verification, 26 assertions)
 - Fixed inconsistent version strings (`GetVersion()` now returns `"3.0"`, aligned with docs and tags)
 
-> Phases 2–4 will address: reliability and concurrency, provider split with new prompt system, and the translation cache.
+> Phases 3–4 will address: provider split with new prompt system, and the translation cache.
 
 ### V2.4 Major Updates
 
