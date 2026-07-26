@@ -1,33 +1,33 @@
-# 翻译提示词合集
+# Translation Prompt Collection
 
-这里整理可直接用于 PotPlayer 字幕翻译的提示词。
+Ready-to-use prompts for PotPlayer subtitle translation.
 
-[English](prompts_EN.md)
+[简体中文](prompts.md)
 
-## 使用方法
+## How to use
 
-1. 打开 `SubtitleTranslate - ollama live translate.as`。
-2. 把下面提示词复制到对应配置：
-   - `systemPrompt`：翻译角色和规则
-   - `userPrompt`：本次要翻译的字幕
-   - `contextPrompt`：前文字幕参考
-3. 保存文件，重启 PotPlayer。
+1. Open `SubtitleTranslate - ollama live translate.as`.
+2. Copy a prompt into the matching field:
+   - `systemPrompt`: translation role and rules
+   - `userPrompt`: current subtitle text
+   - `contextPrompt`: previous subtitle context
+3. Save the file and restart PotPlayer.
 
-## 模板变量
+## Template variables
 
-| 变量                             | 含义                               |
-| -------------------------------- | ---------------------------------- |
-| `{{from}}`                       | 原文语言。使用自动识别时可能为空。 |
-| `{{to}}`                         | 目标语言。                         |
-| `{{text_to_translate}}`          | 当前字幕。`userPrompt` 必须保留。  |
-| `{{context_prompt}}`             | 插入到 `userPrompt` 的上下文提示。 |
-| `{{optional_reference_context}}` | 前文字幕内容。                     |
+| Variable                         | Meaning                                                         |
+| -------------------------------- | --------------------------------------------------------------- |
+| `{{from}}`                       | Source language. May be empty when automatic detection is used. |
+| `{{to}}`                         | Target language.                                                |
+| `{{text_to_translate}}`          | Current subtitle. Required in `userPrompt`.                     |
+| `{{context_prompt}}`             | Context prompt inserted into `userPrompt`.                      |
+| `{{optional_reference_context}}` | Previous subtitle context.                                      |
 
-## 默认提示词
+## Default prompts
 
 ### SYSTEM_PROMPT_BASE
 
-v3.0 默认系统提示词，适合普通字幕。
+v3.0 default system prompt for general subtitle translation.
 
 ```
 const string SYSTEM_PROMPT_BASE =
@@ -65,9 +65,9 @@ const string CONTEXT_PROMPT_BASE =
 "\n";
 ```
 
-### SYSTEM_PROMPT_BASE（旧版本）
+### SYSTEM_PROMPT_BASE (legacy)
 
-旧版本默认系统提示词，可以作为备份参考。
+Earlier default system prompt, kept as a reference.
 
 ```
 const string SYSTEM_PROMPT_BASE =
@@ -94,7 +94,7 @@ const string SYSTEM_PROMPT_BASE =
 
 ### SYSTEM_PROMPT_LONG
 
-长版系统提示词，规则更完整，适合需要更稳定风格的用户。
+Long form system prompt with full role definition, suitable for users who want a stricter style.
 
 ```
 const string SYSTEM_PROMPT_LONG =
@@ -150,11 +150,11 @@ const string SYSTEM_PROMPT_LONG =
     "Follow all rules strictly and execute tasks exactly as defined.\n";
 ```
 
-### 已弃用的系统提示词
+## Deprecated prompts
 
-这些旧提示词不再推荐使用，仅供参考。
+These earlier prompts are kept for reference only.
 
-#### SYSTEM_PROMPT_OLD
+### SYSTEM_PROMPT_OLD
 
 ```
 You are a professional subtitle translator. Your task is to fluently translate text into the target language. Strictly follow these rules:
@@ -164,14 +164,14 @@ You are a professional subtitle translator. Your task is to fluently translate t
 3. Maintain the original tone, style, and narrative of the subtitles.
 ```
 
-#### SYSTEM_PROMPT_BASIC
+### SYSTEM_PROMPT_BASIC
 
 ```
 Act as a professional, authentic translation engine dedicated to providing accurate and fluent translations of subtitles.
 ONLY provide the translated subtitle text without any additional information.
 ```
 
-#### SYSTEM_PROMPT_BASIC_OLD_TWO_STEP
+### SYSTEM_PROMPT_BASIC_OLD_TWO_STEP
 
 ```
 You are a professional subtitle translator skilled in accurate and culturally appropriate translations. I may provide additional context to help clarify the meaning. Use this context to understand the subtitle's meaning and provide an accurate translation. Follow these rules:
@@ -182,11 +182,11 @@ You are a professional subtitle translator skilled in accurate and culturally ap
 4. Your output must only include the translated text—do not include any explanations, context, or commentary.
 ```
 
-## 常用风格
+## Common styles
 
-### 自然口语
+### Natural spoken subtitles
 
-适合电影、电视剧、采访和日常对话。
+For movies, shows, interviews, and everyday dialogue.
 
 ```
 const string SYSTEM_PROMPT_NATURAL =
@@ -198,9 +198,9 @@ const string SYSTEM_PROMPT_NATURAL =
 "Preserve names, numbers, and technical terms.\n";
 ```
 
-### 正式准确
+### Formal and accurate
 
-适合课程、纪录片、新闻和技术内容。
+For courses, documentaries, news, and technical content.
 
 ```
 const string SYSTEM_PROMPT_FORMAL =
@@ -211,9 +211,9 @@ const string SYSTEM_PROMPT_FORMAL =
 "Output only the translated subtitle.\n";
 ```
 
-### 游戏术语
+### Video game terminology
 
-将示例术语替换为你的游戏术语。
+Replace example terms with terms from your game.
 
 ```
 const string SYSTEM_PROMPT_GAME =
@@ -224,9 +224,9 @@ const string SYSTEM_PROMPT_GAME =
 "Output only the translation. Do not explain.\n";
 ```
 
-### 保留语气
+### Preserve tone
 
-适合需要保留幽默、俚语、情绪和脏话的内容。
+For content where humor, slang, emotion, and profanity matter.
 
 ```
 const string SYSTEM_PROMPT_TONE =
@@ -236,9 +236,9 @@ const string SYSTEM_PROMPT_TONE =
 "Do not add explanations. Output only the translation.\n";
 ```
 
-## 上下文提示词
+## Context prompt
 
-上下文只用于理解称呼、术语、语气和前后关系，不要让模型翻译上下文。
+Use context to understand names, terminology, tone, and continuity. Do not translate the context.
 
 ```
 const string CONTEXT_PROMPT_CONTINUITY =
