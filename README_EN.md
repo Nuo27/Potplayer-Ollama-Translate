@@ -85,12 +85,10 @@ Ollama test version: 0.32.1
 
 ### V3.0 main updates
 
+- Full refactor of the plugin, removed unnecessary model config.
 - Reworked API call and error handling flow, with automatic retry on network failures.
 - Added four API types: `ollama`, `rest`, `openai`, `anthropic`.
 - Added context memory and translation cache.
-- Added model pre-warm to reduce first-translation latency.
-- Thinking mode is disabled by default to reduce subtitle translation delay.
-- API keys are automatically redacted in logs.
 
 <details>
 <summary>V2.4 main updates</summary>
@@ -113,41 +111,41 @@ Ollama test version: 0.32.1
 
 ### Model selection
 
-| Field             | Description                                                              |
-| ----------------- | ------------------------------------------------------------------------ |
-| `modelName`       | Model name. Usually filled in the PotPlayer login dialog, e.g. `qwen3:9b`. |
-| `apiKey`          | API key. Usually managed by the PotPlayer login dialog; local Ollama can leave it empty. |
-| `apiFormat`       | API type: `ollama`, `rest`, `openai`, `anthropic`. Requires editing the `.as` file. |
-| `customEndpoint`  | Custom service address. Leave empty to use the default endpoint.         |
+| Field            | Description                                                                              |
+| ---------------- | ---------------------------------------------------------------------------------------- |
+| `modelName`      | Model name. Usually filled in the PotPlayer login dialog, e.g. `qwen3:9b`.               |
+| `apiKey`         | API key. Usually managed by the PotPlayer login dialog; local Ollama can leave it empty. |
+| `apiFormat`      | API type: `ollama`, `rest`, `openai`, `anthropic`. Requires editing the `.as` file.      |
+| `customEndpoint` | Custom service address. Leave empty to use the default endpoint.                         |
 
 ### Model configuration
 
-| Field             | Example         | Description                                                         |
-| ----------------- | --------------- | ------------------------------------------------------------------- |
-| `temperature`     | `0.1 - 0.3`     | Lower values make translation more stable; `0.3` recommended.        |
-| `topP`            | `0.8 - 0.95`    | Controls token selection range; usually no need to change.           |
-| `contextLength`   | `4096`          | Context window size. Larger uses more VRAM; keep `4096` for normal subtitles. |
-| `maxTokens`       | `512`           | Output length cap per request; keep `512` for normal subtitles.     |
-| `cacheEnabled`    | `false`         | Enable disk cache.                                                  |
-| `cacheMaxEntries` | `500`           | Maximum cached translation entries.                                 |
-| `useHttpClient`   | `false`         | Use an alternative HTTP transport. Try only if status codes are mis-detected. |
+| Field             | Example      | Description                                                                   |
+| ----------------- | ------------ | ----------------------------------------------------------------------------- |
+| `temperature`     | `0.1 - 0.3`  | Lower values make translation more stable; `0.3` recommended.                 |
+| `topP`            | `0.8 - 0.95` | Controls token selection range; usually no need to change.                    |
+| `contextLength`   | `4096`       | Context window size. Larger uses more VRAM; keep `4096` for normal subtitles. |
+| `maxTokens`       | `512`        | Output length cap per request; keep `512` for normal subtitles.               |
+| `cacheEnabled`    | `false`      | Enable disk cache.                                                            |
+| `cacheMaxEntries` | `500`        | Maximum cached translation entries.                                           |
+| `useHttpClient`   | `false`      | Use an alternative HTTP transport. Try only if status codes are mis-detected. |
 
 > These fields live in the `Config` class of the `.as` file. You usually only need to adjust `temperature` and `contextEnabled`. Do not invent fields that do not exist.
 
 ### Reasoning configuration
 
-| Field            | Example                          | Description                                          |
-| ---------------- | -------------------------------- | ---------------------------------------------------- |
+| Field            | Example                          | Description                                                              |
+| ---------------- | -------------------------------- | ------------------------------------------------------------------------ |
 | `enableThinking` | `false`                          | Enable the model's reasoning feature. Strongly recommend leaving it off. |
-| `thinkStrength`  | `"low"` `"medium"` `"high"` `""` | Adjust the model's reasoning strength. Leave empty by default. |
+| `thinkStrength`  | `"low"` `"medium"` `"high"` `""` | Adjust the model's reasoning strength. Leave empty by default.           |
 
 ### Context history
 
-| Field            | Example                | Description                                                    |
-| ---------------- | ---------------------- | -------------------------------------------------------------- |
-| `contextEnabled` | `true`                 | Whether to use previous subtitle history in translation.       |
-| `contextCount`   | `7`                    | Number of recent subtitle lines used as context.                |
-| `contextMaxSize` | `20`                   | Maximum number of history entries retained.                    |
+| Field            | Example                        | Description                                              |
+| ---------------- | ------------------------------ | -------------------------------------------------------- |
+| `contextEnabled` | `true`                         | Whether to use previous subtitle history in translation. |
+| `contextCount`   | `7`                            | Number of recent subtitle lines used as context.         |
+| `contextMaxSize` | `20`                           | Maximum number of history entries retained.              |
 | `contextPrompt`  | [prompts_EN.md](prompts_EN.md) | Custom context prompt template.                          |
 
 > Each history entry stores source, translation, and language metadata in the form `[source] source -> [target] translation`.
@@ -192,12 +190,12 @@ class Config {
 
 ### Select API type
 
-| `apiFormat` | Backend | Default endpoint |
-| --- | --- | --- |
-| `ollama` | Ollama | `http://127.0.0.1:11434` |
-| `rest` | LM Studio REST | `http://127.0.0.1:1234/api/v1/chat` |
-| `openai` | OpenAI compatible | `http://127.0.0.1:1234/v1/chat/completions` |
-| `anthropic` | Anthropic compatible | `http://127.0.0.1:1234/v1/messages` |
+| `apiFormat` | Backend              | Default endpoint                            |
+| ----------- | -------------------- | ------------------------------------------- |
+| `ollama`    | Ollama               | `http://127.0.0.1:11434`                    |
+| `rest`      | LM Studio REST       | `http://127.0.0.1:1234/api/v1/chat`         |
+| `openai`    | OpenAI compatible    | `http://127.0.0.1:1234/v1/chat/completions` |
+| `anthropic` | Anthropic compatible | `http://127.0.0.1:1234/v1/messages`         |
 
 ### Ollama Cloud
 
