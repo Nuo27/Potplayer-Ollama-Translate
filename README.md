@@ -5,17 +5,21 @@
 <div align="center">
   <strong>简体中文</strong> | <a href="https://github.com/Nuo27/Potplayer-Ollama-Translate/blob/main/README_EN.md">English</a>
 </div>
+<div align="right">
+Ollama测试版本：0.32.1
+</div>
 
 ## 功能特性
 
-- 支持自定义翻译提示词
-  - 使用变量来替换提示词中的内容 -> [提示词模板](#提示词模板)
-- api 支持
-  - Ollama 本地原生 api
-  - ollama cloud 和自定义 api ->[高级配置](#高级配置和-debug)
-- 支持配置推理模型的思考功能，包括 qwen3, deepsseek-r1, gpt-oss -> [推理配置](#推理配置)
-- 可以配置的上文历史 -> [上文历史](#上文历史)
-- 自定义大模型参数配置 -> [模型配置](#模型配置)
+- 实时翻译 PotPlayer 字幕。
+- 支持多种 API 协议：Ollama 原生、LM Studio REST、OpenAI 兼容、Anthropic 兼容，详见[高级配置和 Debug](#高级配置和-debug)。
+- 支持 Ollama Cloud、云端 OpenAI / Anthropic 兼容 API。
+- 可自定义系统提示词、用户提示词和上下文提示词，提供 [提示词合集](prompts.md)。
+- 可配置模型参数（`temperature`、`topP`、`contextLength`、`maxTokens`），详见[模型配置](#模型配置)。
+- 支持上文历史（最近 N 条字幕），翻译更自然，详见[上文历史](#上文历史)。
+- 支持翻译缓存（内存 + 可选磁盘），重复字幕不再重复请求。
+- 可控制推理模型的思考模式，包括 qwen3、deepseek-r1、gpt-oss，详见[推理配置](#推理配置)。
+- 网络异常时自动重试，错误日志包含诊断信息。
 
 ## 目录
 
@@ -23,13 +27,9 @@
   - [功能特性](#功能特性)
   - [目录](#目录)
   - [安装插件](#安装插件)
-  - [高级配置和 Debug](#高级配置和-debug)
   - [注意事项](#注意事项)
-   - [更新](#更新)
-     - [V3.0 主要更新](#v30-主要更新)
-     - [V2.4 主要更新](#v24-主要更新)
-     - [V2.3 主要更新](#v23-主要更新)
-  - [TODO](#todo)
+  - [更新](#更新)
+    - [V3.0 主要更新](#v30-主要更新)
   - [关于项目](#关于项目)
   - [自定义配置](#自定义配置)
     - [模型选择](#模型选择)
@@ -37,8 +37,17 @@
     - [推理配置](#推理配置)
     - [上文历史](#上文历史)
     - [提示词模板](#提示词模板)
+  - [高级配置和 Debug](#高级配置和-debug)
+    - [选择 API 类型](#选择-api-类型)
+    - [Ollama Cloud](#ollama-cloud)
+    - [LM Studio REST](#lm-studio-rest)
+    - [OpenAI 兼容 API](#openai-兼容-api)
+    - [Anthropic 兼容 API](#anthropic-兼容-api)
+    - [自定义端点](#自定义端点)
+    - [Debug](#debug)
   - [性能表现](#性能表现)
     - [Ollama](#ollama)
+    - [本地其他服务](#本地其他服务)
     - [云端 API](#云端-api)
   - [参考资料](#参考资料)
   - [许可证](#许可证)
@@ -48,7 +57,7 @@
 1. 前往 [Release 页面](https://github.com/Nuo27/Potplayer-Ollama-Translate/releases)，下载 `.7z` 或 `.zip` 压缩包，解压后你将得到一个 `.as` 文件和一个 `.ico` 文件。
 2. 将这两个文件复制到 PotPlayer 安装目录下的
    `...\DAUM\PotPlayer\Extension\Subtitle\Translate` 文件夹中。
-3. 使用文本编辑器或 IDE 打开 `.as` 文件，修改 `DEFAULT_MODEL_NAME` 的值为**保底模型名称**。当你尚未在扩展设置中配置模型时，将默认使用该模型。
+3. 使用文本编辑器或 IDE 打开 `.as` 文件。如果使用 Ollama 以外的服务，在 `Config` 类中修改 `apiFormat` 和 `customEndpoint`，详见[高级配置和 Debug](#高级配置和-debug)。
 4. 启动 PotPlayer，右键点击视频窗口，依次进入
    `字幕 → 实时字幕翻译`，选择 **Ollama Translate**，然后打开 **实时字幕翻译设置**。
    你也可以通过 `选项 → 扩展功能 → 实时字幕翻译` 打开该设置面板。
@@ -62,26 +71,6 @@
 
 > 由于 PotPlayer 的机制限制，**测试** 按钮会返回缓存中的翻译结果。在修改配置后请稍微修改测试文本内容，再次测试即可看到新的翻译结果。
 
-## 高级配置和 Debug
-
-- **自定义提示词**：在[提示词模板](#提示词模板)，可根据模板以自定义系统和用户提示词，以适应不同的模型和翻译需求
-- **Ollama Cloud**：在账户设置中填入你的 API Key，并使用 Ollama Cloud 的模型进行翻译
-  - 不需要单独填入`g_customEndpoint`，请保持为空，插件会根据 API Key 是否为空来判断使用本地还是云端
-- **自定义 API**：现在已支持自定义 OpenAI 兼容的 API endpoint
-  - 如果使用的是支持 OpenAI 兼容的 API，需要在插件中把 url 填入 `g_customEndpoint`
-    - 例如：
-      - `http://localhost:1234/v1/chat/completions` - LM Studio
-      - `https://openrouter.ai/api/v1/chat/completions` - OpenRouter
-    - 插件会检测是否使用 OpenAI 兼容的 API，并检查模型是否在支持列表中
-  - 如果使用了一个自定义的 endpoint，请确保它是完整的，并以`/chat/completions`结尾
-    - 例如：
-      - `https://api.z.ai/api/paas/v4/chat/completions` - Z.AI GLM
-    - 插件会跳过模型检查，并直接使用提供的 endpoint 和模型进行翻译
-- **Debug**：
-  - 在 `OnInitialize` 方法中取消 `HostOpenConsole` 的注释，即可在运行时打开查看控制台输出
-  - `HostPrintUTF8` 方法可以用于输出调试信息
-  - `HostMessageBox` 方法可以用于弹出消息框
-
 ## 注意事项
 
 - Ollama 本地用户请**请确保将模型和 ollama 更新到 >= 0.9.0 版本**
@@ -94,80 +83,15 @@
 
 ### V3.0 主要更新
 
-架构级重写，分阶段推进。
-
-#### Phase 4：翻译缓存 + 收尾
-
-- **新增 `TranslationCache`**：基于 sha256(text + srcLang + dstLang + modelName) 的 KV 缓存
-  - **内存缓存始终启用**（即使 `cacheEnabled=false` 也在进程内做命中判断）
-  - **磁盘持久化可选**（`Config.cacheEnabled=true` 时启用）：基于 `IniFile` 在 PotPlayer 配置文件夹生成 `ollama_tr_cache_v3.ini`，重启 PotPlayer 后保留
-  - **LRU 淘汰**：达到 `Config.cacheMaxEntries`（默认 500）时淘汰最旧条目
-  - **值转义**：INI 不容忍换行/制表符，写入前转义、读取后反转义（已通过 SelfTest 验证往返一致性）
-  - **缓存键不含 prompt hash**（Q5 决策）：用户改 prompt 不会自动失效缓存——若需强制刷新，删除 ini 文件或换模型名
-- **`Translate()` 流程接入缓存**：每条字幕先查缓存，命中直接返回（跳过整次 HTTP 往返），未命中走完整 pipeline 后写入
-  - 回放/快退/重复台词 → 零延迟
-  - 云端 API 用户 → 直接省钱
-- **RTL 语言完整化**：补全 `ur`（乌尔都语）、`yi`（意第绪语），与 `fa/ar/he` 一起加 RLM 标记
-- **移除未使用的 `SplitString`**（v2 遗留，Phase 3 删 FormatModelInfo 后失去调用点）
-- SelfTest：41 → 50 条断言（新增 ComputeKey 确定性、Set/TryGet 往返、LRU 淘汰、INI 转义往返）
-
-#### Phase 3：Provider 分裂 + Prompt v3
-
-- **4-mode Provider 矩阵**（基于 customEndpoint 与 apiKey 的存在与否自动判定）：
-  - OllamaLocal：`baseUrl + /api/chat`，options 包装，无 auth
-  - OllamaCloud：`ollama.com/api/chat`，options 包装，Bearer
-  - OpenAILocal（如 LM Studio）：`<endpoint>/v1/chat/completions`，顶层参数，无 auth
-  - OpenAICloud（如 Z.AI / OpenRouter）：同上 + Bearer
-- **URL 自动补全**（`EndpointNormalizer`）：用户填 `http://127.0.0.1:1234` 自动追加 `/v1/chat/completions`；填完整 URL 原样使用
-- **修复 Q8/H8**：OpenAI 兼容路径改为**顶层参数**（`temperature` / `top_p` / `max_tokens`），不再误用 Ollama 的 `options` 包装
-- **登录校验从 3 次请求降到 1 次**：移除 `/api/show`、`/api/version` 探测，只拉模型列表确认用户模型存在
-- **Prompt v3 上线**：System Prompt 从 ~220 token 降到 ~70 token（节省 68%），改为正向指令、删除矛盾约束、删除冗余"Output plain text"重复
-- **上下文格式**（修 H5）：`src ⇒ dst` 取代 `[lang] src -> [lang] dst`，省去元数据，每条省 ~10 token
-- **JSON 稳定序列化**（修 H3）：显式按字母序列出字段，不再依赖 jsoncpp dictionary 遍历（非确定性）
-- **model 名 JSON 转义**（修 H4）：含 `"` 或 `\` 的模型名不再破坏请求
-- **移除约 250 行死代码**：FormatModelInfo、ParseParameterString、JsonValueToString、CompareVersion、SupportsNativeThinking、GetModelInfo、GetAvailableModels、GetOpenAIModels、LoadDefaults、GetActiveParams、FetchAndApplyModelInfo、DetectThinkingSupport、LoginNativeOllama、LoginCustomEndpoint、IsModelValid、HandleModelNotFound、defaultParams、modelArchitecture、ollamaSupportsNativeThinking
-- SelfTest：26 → 41 条断言（新增 EndpointNormalizer、ProviderInfo、ParseModelsList、TrySelectModelFromList、FirstNModels、ContextHistory 格式验证）
-
-#### Phase 2：稳定性与并发
-
-- 引入 `Response` 类型（`status` + `body`），全链路传递 HTTP 状态码（修 C3）
-- 引入 `HttpTransport` 类，**双实现并存**：默认 `HostUrlGetString`，开启 `Config.useHttpClient` 切换到 `HttpClient`（拿到真实 status code）
-- 关键路径主动调用 `HostIncTimeOut(15000)`，避免 LLM 长响应被 PotPlayer 强杀
-- 引入 `RetryPolicy`（并入 `HttpTransport.SendWithRetry`）：网络层失败 / 5xx / 429 自动重试 1 次，500ms backoff；4xx 不重试
-- 引入 `TextCleaner.IsTranslatable`：跳过空 / 纯数字 / 纯标点输入，节省 API 调用
-- 重写 `RemoveThinkingTags`（修 C2）：扫描式实现，正确处理 `<think attr="x">` / `<thinking>` / 多个连续标签 / 未闭合标签
-- **失败时返回原文而非空字幕**（修 H7）：网络抖动、限流、模型卡顿时用户仍能看到原字幕
-- `ContextHistory` 加并发说明：快照-then-追加模式，无锁但临界区极短
-
-#### Phase 1：基础重构与关键 Bug 修复
-
-- 引入 `Logger` 类，统一日志出口，**自动脱敏 API Key**（修复 API Key 明文写入日志的安全问题）
-- 日志分级：`Info / Warn / Error / Debug`，Debug 由 `g_logger.debug` 开关控制
-- 移除死代码：`SYSTEM_PROMPT_LONG`（50 行未引用常量）、`RunLoginTest`（已注释函数）
-- 移除 `DEFAULT_MODEL_NAME` 常量及其 fallback 逻辑
-- 移除 `ApplyTemplate` 中的 `from  to` / `while "  "` hack（修复误改用户 prompt 模板的数据损坏 bug）
-- 移除 `{{text}}` 别名变量（与 `{{text_to_translate}}` 重复，统一用后者）
-- 新增 `Config.Load()/Save()` 方法集中管理配置读写
-- 修复版本号不一致（`GetVersion()` 现返回 `"3.0"`，与文档/标签对齐）
-
-> v3.0 四阶段全部完成。如有新需求或问题请提 issue。
-
-### V2.4 主要更新
-
-- 重构插件配置和 API 调用流程
-- 实现更丰富的上下文历史和上下文提示词模板，包含原文/译文/语言元数据
-- 仅在启用时注入上下文到用户/系统提示词
-- 重构登录流程为原生和自定义处理程序
-- 杂项：调整语言规范化、模板替换
-
-### V2.3 主要更新
-
-- 重构了提示词模板和处理，并且支持使用变量来替换提示词中的内容。
-- 重构了插件的错误处理，并优化了模型/api 的检测逻辑
-- 新增了对自定义 api 的支持，你可以指定 api url 和 key 来使用外部 LLM 提交翻译请求。
+- 重构 API 调用和错误处理流程，网络失败时自动重试。
+- 支持 `ollama`、`rest`、`openai`、`anthropic` 四种 API 类型。
+- 新增上下文记忆和翻译缓存。
+- 新增模型预加载，减少第一次翻译等待时间。
+- 默认关闭思考模式，降低字幕翻译延迟。
+- 日志会自动隐藏 API Key。
 
 <details>
-<summary>V2.2 主要更新</summary>
+<summary>V2.4 主要更新</summary>
 
 - 更新了提示词，提高准确性和通顺度，优化不完整句子的指令
 - 重构 API 请求构建，支持 Ollama 原生和 OpenAI 兼容的 API 请求
@@ -176,13 +100,6 @@
   - 没有进行深度测试，如果有问题请提 issue
 
 </details>
-
-## TODO
-
-- [ ] 优化提示词 (长期)
-  - 提高翻译质量
-- [ ] Terms 术语表
-  - 写了一版并且测试了几个 10-14g 左右的模型，但其实在这种小参数模型里效果也差不太多，所以暂时不加入这个功能
 
 ## 关于项目
 
@@ -194,38 +111,42 @@
 
 ### 模型选择
 
-| 变量                 | 描述                                                                                           |
-| -------------------- | ---------------------------------------------------------------------------------------------- |
-| `DEFAULT_MODEL_NAME` | 默认模型名称（默认值：`"qwen3.5:27b"`）。**如果没有在 Potplayer 设置中配置模型，将使用该模型** |
+| 变量             | 描述                                                                     |
+| ---------------- | ------------------------------------------------------------------------ |
+| `modelName`      | 模型名称。通常在 PotPlayer 的账户设置中填写，例如 `qwen3:9b`。           |
+| `apiKey`         | API Key。通常由 PotPlayer 账户设置管理；本地 Ollama 可以留空。           |
+| `apiFormat`      | API 类型：`ollama`、`rest`、`openai`、`anthropic`。需要编辑 `.as` 文件。 |
+| `customEndpoint` | 自定义服务地址。留空时使用对应服务的默认地址。                           |
 
 ### 模型配置
 
-| 变量            | 示例值       | 描述                                                       |
-| --------------- | ------------ | ---------------------------------------------------------- |
-| `temperature`   | `0.1 - 0.3`  | 较低的值使输出更确定性，更少创造性。                       |
-| `topP`          | `0.8 - 0.95` | 只考虑累计概率 ≥ topP 的最小顶级 token 集合。              |
-| `topK`          | `20-40`      | 在每个生成步骤中只考虑最可能的前 K 个 token。              |
-| `minP`          | `0.01 - 0.1` | 过滤概率低于 minP 的 token，即使它们在 `topP` 或 `topK` 中 |
-| `repeatPenalty` | `1.0 - 2.0`  | 对已生成的 token 进行惩罚，阻止重复                        |
-| `maxTokens`     | `1024-2048`  | 可生成的最大 token 数量。                                  |
+| 变量              | 示例值       | 描述                                                       |
+| ----------------- | ------------ | ---------------------------------------------------------- |
+| `temperature`     | `0.1 - 0.3`  | 较低值让翻译更稳定，推荐保持 `0.3`。                       |
+| `topP`            | `0.8 - 0.95` | 控制模型选词范围，通常不用修改。                           |
+| `contextLength`   | `4096`       | 上下文窗口大小。越大越占用显存，普通字幕保持 `4096`。      |
+| `maxTokens`       | `512`        | 单次输出长度上限。普通字幕保持 `512`。                     |
+| `cacheEnabled`    | `false`      | 是否启用磁盘缓存。                                         |
+| `cacheMaxEntries` | `500`        | 磁盘缓存最多保存的翻译数量。                               |
+| `useHttpClient`   | `false`      | 是否使用另一种 HTTP 请求方式。遇到状态码识别问题时再尝试。 |
 
-> 可根据需要添加其他参数，但通常来说你只需要调整温度和 topP。请确保相应更新 `GetActiveParams` 方法。
+> 这些配置位于 `.as` 文件的 `Config` 类。通常只需要调整 `temperature` 和 `contextEnabled`。不要随意添加不存在的参数。
 
 ### 推理配置
 
-| 变量             | 示例值                           | 描述                                                                                                                                                        |
-| ---------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enableThinking` | `false`                          | 激活模型中的推理功能。强烈建议`关闭`                                                                                                                        |
-| `thinkStrength`  | `"low"` `"medium"` `"high"` `""` | 调整 gpt-oss 模型的思考强度。仅适用于 gpt-oss 且 gpt-oss 模型的思考不能被关闭，如果`enableThinking`被设置成`false`，会自动使用`"low"`强度。默认情况请留空。 |
+| 变量             | 示例值                           | 描述                                 |
+| ---------------- | -------------------------------- | ------------------------------------ |
+| `enableThinking` | `false`                          | 激活模型中的推理功能。强烈建议`关闭` |
+| `thinkStrength`  | `"low"` `"medium"` `"high"` `""` | 调整模型的思考强度。默认情况请留空。 |
 
 ### 上文历史
 
-| 变量             | 示例值 | 描述                                                   |
-| ---------------- | ------ | ------------------------------------------------------ |
-| `contextEnabled` | `true` | 是否使用上文历史进行翻译                               |
-| `contextCount`   | `5`    | 包含在上文中的最近句子数量                             |
-| `contextMaxSize` | `10`   | 历史记录条目的最大数量                                 |
-| `contextPrompt`  | 见下方 | 自定义上下文提示词模板（见下方 `CONTEXT_PROMPT_BASE`） |
+| 变量             | 示例值                   | 描述                       |
+| ---------------- | ------------------------ | -------------------------- |
+| `contextEnabled` | `true`                   | 是否使用上文历史进行翻译   |
+| `contextCount`   | `7`                      | 包含在上文中的最近句子数量 |
+| `contextMaxSize` | `20`                     | 历史记录条目的最大数量     |
+| `contextPrompt`  | [prompts.md](prompts.md) | 自定义上下文提示词模板     |
 
 > 历史记录条目包含原文、译文和语言元数据，格式为：`[源语言] 原文 -> [目标语言] 译文`
 > 如果显著增加条目数量，由于上下文大小增加，响应时间也可能显著增加。还需要相应调整 token 数量。
@@ -233,183 +154,108 @@
 
 ### 提示词模板
 
-你可以把以下模板应用给你的提示词，使用变量来替换提示词中的内容
+提示词合集已移至 [prompts.md](prompts.md) 以供参考
+
+其中包含：
+
+- 默认系统、用户和上下文提示词
+- 自然口语字幕
+- 正式准确翻译
+- 游戏术语翻译
+- 保留语气、俚语和脏话
+- 自定义术语表
+
+模板支持以下变量：
 
 - `{{from}}` 表示源语言
 - `{{to}}` 表示目标语言
-- `{{optional_reference_context}}` 表示可选的参考历史（仅当上下文历史启用且非空时才会填充）
-- `{{text_to_translate}}` 表示需要翻译的文本内容
-- `{{context_prompt}}` 表示上下文提示词模板（仅当上下文历史启用且 `contextPrompt` 非空时才会填充）
+- `{{optional_reference_context}}` 表示可选的参考历史
+- `{{text_to_translate}}` 表示需要翻译的文本内容，`userPrompt` 必须保留
+- `{{context_prompt}}` 表示上下文提示词模板
 
-<details>
-<summary>SYSTEM_PROMPT_BASE</summary>
+> 修改提示词时，建议要求模型只输出译文。否则模型可能把解释内容也显示到字幕中。
 
+## 高级配置和 Debug
+
+插件支持四种 API 协议，在 `.as` 文件的 `Config` 类中切换：
+
+```javascript
+class Config {
+    string apiFormat = "ollama";   // ollama | rest | openai | anthropic
+    string customEndpoint = "";
+}
 ```
 
-const string SYSTEM_PROMPT_BASE =
-"You are a professional simultaneous interpreter.\n"
-"Translate from {{from}} into {{to}} with natural, fluent, native-sounding output.\n"
-"Preserve meaning, tone, emotion, and speaker intent.\n"
-"\n"
-"Context & History:\n"
-"- Reference context and prior turns are for tone, intent, and continuity only\n"
-"- Never translate or quote context or history\n"
-"- If context conflicts with the current text, translate the current text faithfully\n"
-"- Assume the same speaker unless stated otherwise\n"
-"\n"
-"Rules:\n"
-"- Output ONLY the translation in {{to}}\n"
-"- Do NOT add explanations or commentary\n"
-"- Keep names, numbers, symbols, tags, and formatting unchanged\n"
-"- Smooth disfluencies only when it improves natural spoken flow\n"
-"- Do not add, omit, or reinterpret meaning\n"
-"- If input is fragmentary or incomplete, translate it naturally as-is\n"
-"\n"
-"Follow the rules strictly, output PLAIN TEXT ONLY.";
+`apiFormat` 和 `customEndpoint` 不在 PotPlayer 登录界面中，必须直接编辑 `.as` 文件修改。修改后重启 PotPlayer。
 
-```
+### 选择 API 类型
 
-</details>
-<details>
-<summary>USER_PROMPT_BASE</summary>
+| `apiFormat` | 服务           | 默认端点                                    |
+| ----------- | -------------- | ------------------------------------------- |
+| `ollama`    | Ollama         | `http://127.0.0.1:11434`                    |
+| `rest`      | LM Studio REST | `http://127.0.0.1:1234/api/v1/chat`         |
+| `openai`    | OpenAI 兼容    | `http://127.0.0.1:1234/v1/chat/completions` |
+| `anthropic` | Anthropic 兼容 | `http://127.0.0.1:1234/v1/messages`         |
 
-```
+### Ollama Cloud
 
-const string USER_PROMPT_BASE =
-"{{context_prompt}}"
-"\n"
-"Translate ONLY the text inside <Text> into {{to}}.\n"
-"The context is for tone and continuity only and must NOT be translated.\n"
-"\n"
-"<Text>\n"
-"{{text_to_translate}}\n"
-"</Text>";
+- 在账户设置中填入 API Key。
+- `apiFormat` 保持为 `"ollama"`。
+- `customEndpoint` 保持为空。
+- 插件会自动使用云端 API。
 
-```
+### LM Studio REST
 
-</details>
-<details>
-<summary>CONTEXT_PROMPT_BASE</summary>
+- 将 `apiFormat` 改为 `"rest"`。
+- 默认地址为 `http://127.0.0.1:1234/api/v1/chat`。
+- 在 LM Studio 中开启本地服务并加载模型。
 
-```
+### OpenAI 兼容 API
 
-const string CONTEXT_PROMPT_BASE =
-"The context below provides reference material from prior turns.\n"
-"Use it for tone, intent, and continuity only.\n"
-"Do NOT translate or quote the context.\n"
-"\n"
-"<Context>\n"
-"{{optional_reference_context}}\n"
-"</Context>";
+- 将 `apiFormat` 改为 `"openai"`。
+- 在 `customEndpoint` 中填写服务地址，例如：
+  - `http://localhost:1234` - LM Studio
+  - `https://openrouter.ai/api/v1` - OpenRouter
+  - `https://api.z.ai/api/paas/v4` - Z.AI GLM
 
-```
+### Anthropic 兼容 API
 
-</details>
-<details>
-<summary>SYSTEM_PROMPT_LONG</summary>
+- 将 `apiFormat` 改为 `"anthropic"`。
+- 在账户设置中填写 API Key。
+- 在 `customEndpoint` 中填写服务地址。
 
-```
-const string SYSTEM_PROMPT_LONG =
-    "Role: Simultaneous Interpreter\n"
-    "\n"
-    "Profile\n"
-    "- Source Language: {{from}}\n"
-    "- Target Language: {{to}}\n"
-    "- Description: Act as a senior professional simultaneous interpreter, delivering accurate, natural, and listener-friendly translations suitable for real-time interpretation or subtitles.\n"
-    "- Experience: 15+ years in corporate, legal, diplomatic, and technical live interpretation.\n"
-    "- Style: Calm, precise, adaptive, and native-sounding.\n"
-    "\n"
-    "Core Skills\n"
-    "1. Interpretation\n"
-    "- Accuracy: Preserve original meaning, intent, and tone.\n"
-    "- Fluency: Produce natural spoken language; avoid stiff or literal phrasing.\n"
-    "- Cultural Adaptation: Adjust expressions appropriately from {{from}} to {{to}}.\n"
-    "- Real-time Optimization: Prioritize clarity, brevity, and smooth flow.\n"
-    "\n"
-    "2. Technical Handling\n"
-    "- Terminology Consistency: Maintain domain-specific terms across {{from}} → {{to}}.\n"
-    "- Preservation: Keep all names, numbers, symbols, identifiers, code, and tags unchanged.\n"
-    "- Formatting: Preserve original punctuation, spacing, and structure.\n"
-    "- Smoothing: Remove filler words, repetitions, and minor grammatical issues without altering meaning.\n"
-    "\n"
-    "Output Rules (Strict)\n"
-    "- Output ONLY the translated text in {{to}}.\n"
-    "- Do NOT include explanations, notes, comments, or metadata.\n"
-    "- Do NOT add, omit, or reinterpret content.\n"
-    "- Do NOT use Markdown unless present in the source.\n"
-    "- Output plain text only.\n"
-    "\n"
-    "Context History Handling\n"
-    "- The user prompt may include prior context or conversation history in {{from}}.\n"
-    "- Use context ONLY as background to resolve references, implied meaning, tone, and terminology consistency.\n"
-    "- Translate ONLY the explicitly provided target text from {{from}} to {{to}}.\n"
-    "- Do NOT translate, quote, summarize, or reference context history.\n"
-    "- If context conflicts with current input, prioritize the current input.\n"
-    "- If context is unclear or incomplete, translate conservatively without speculation.\n"
-    "\n"
-    "Behavioral Guidelines\n"
-    "- Optimize output for real-time listening and subtitle readability.\n"
-    "- Smooth incomplete or cut-off sentences naturally.\n"
-    "- Ensure the final result sounds fluent, native, and effortless in {{to}}.\n"
-    "\n"
-    "Workflow\n"
-    "- Step 1: Read source text ({{from}}) and optional context.\n"
-    "- Step 2: Interpret meaning while preserving intent and tone.\n"
-    "- Step 3: Refine for fluency and subtitle compatibility in {{to}}.\n"
-    "- Result: One clean block of natural, accurate translated text in {{to}}.\n"
-    "\n"
-    "Initialization\n"
-    "Follow all rules strictly and execute tasks exactly as defined.\n";
+### 自定义端点
 
-```
+- `customEndpoint` 可以填写服务主机地址，也可以填写完整地址。
+- 插件会根据 `apiFormat` 自动补齐 API 路径。
+- 例如 `http://localhost:1234` 会自动补为 `/api/chat` 或 `/v1/chat/completions` 等。
 
-</details>
-<details>
-<summary>已弃用的系统提示词（供参考）</summary>
+### Debug
 
-- SYSTEM_PROMPT_OLD
+- 在 `OnInitialize` 方法中取消 `HostOpenConsole` 的注释，即可在运行时打开控制台。
+- `HostPrintUTF8` 方法可以输出调试信息。
+- `HostMessageBox` 方法可以弹出消息框。
 
-```
-You are a professional subtitle translator. Your task is to fluently translate text into the target language. Strictly follow these rules:
-
-1. Output only the translated content, without explanations or additional content.
-2. Use provided context if provided to aid understanding, but DO NOT include it in your output.
-3. Maintain the original tone, style, and narrative of the subtitles.
-```
-
-- SYSTEM_PROMPT_BASIC
-
-```
-Act as a professional, authentic translation engine dedicated to providing accurate and fluent translations of subtitles.
-ONLY provide the translated subtitle text without any additional information.
-```
-
-- SYSTEM_PROMPT_BASIC_OLD_TWO_STEP
-
-```
-You are a professional subtitle translator skilled in accurate and culturally appropriate translations. I may provide additional context to help clarify the meaning. Use this context to understand the subtitle's meaning and provide an accurate translation. Follow these rules:
-
-1. First, perform a direct translation based on the original text without adding any information.
-2. Then, reinterpret the translation to make it sound more natural and understandable in the target language, while preserving the original meaning.
-3. Use the provided context and cultural cues to ensure the translation aligns with local language norms and nuances.
-4. Your output must only include the translated text—do not include any explanations, context, or commentary.
-```
-
-</details>
+> 高级设置面向熟悉模型和 API 的用户。普通用户只需使用默认的 Ollama 配置。
 
 ## 性能表现
 
 ### Ollama
 
-**支持模型：**
+**支持模型：** 只要你的模型能在 ollama app 或 Ollama cli 里运行，插件就是支持的。
 
-- 所有 ollama 官方支持的模型
-- 所有 ollama 社区支持的 huggingface 模型
-- 通过 ollama 配置的自定义模型
+> 请测试你的 token/s，响应过慢的模型可能会导致翻译延迟或失败。根据你的硬件配置和需求进行配置，以确保最佳性能。
 
-> 意思是只要你的模型能在 ollama app 或 Ollama cli 里运行，插件就是支持的。
+### 本地其他服务
 
-请测试你的 token/s，响应过慢的模型可能会导致翻译延迟或失败。根据你的硬件配置和需求进行配置，以确保最佳性能。
+已测试平台：
+
+- LM Studio
+- vLLM
+- llama.cpp
+
+> 理论上支持所有本地运行的模型，但需要你自己配置。
+> 请优先提前加载模型，以避免因模型加载导致的翻译延迟。
 
 ### 云端 API
 
