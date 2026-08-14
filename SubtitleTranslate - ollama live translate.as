@@ -385,18 +385,26 @@ string BuildOllamaRequest(const string &in escapedModel, const string &in sysCon
          + "\"},{\"role\":\"user\",\"content\":\"" + EscapeJsonString(userContent) + "\"}]";
     string req = "{\"model\":\"" + escapedModel + "\",\"messages\":" + messages;
 
-    // options: num_ctx (when set) + temperature + top_p
+    // options: num_ctx (when set) + num_predict (when set) + temperature + top_p
     if (g_config.contextLength > 0) {
         req += ",\"options\":{\"num_ctx\":" + g_config.contextLength
+             + (g_config.maxTokens > 0 ? ",\"num_predict\":" + g_config.maxTokens : "")
              + ",\"temperature\":" + g_config.temperature
              + ",\"top_p\":" + g_config.topP + "}";
     } else {
-        req += ",\"options\":{\"temperature\":" + g_config.temperature
+        req += ",\"options\":{"
+             + (g_config.maxTokens > 0 ? "\"num_predict\":" + g_config.maxTokens + "," : "")
+             + "\"temperature\":" + g_config.temperature
              + ",\"top_p\":" + g_config.topP + "}";
     }
 
     // always emit think to avoid qwen3 default-think timeout
     req += ",\"think\":" + OllamaThinkValue();
+    // local only: keep the model resident so a playback pause does not
+    // force a model reload (and a watchdog timeout) on the next subtitle
+    if (g_config.apiKey.empty()) {
+        req += ",\"keep_alive\":\"30m\"";
+    }
     req += ",\"stream\":false}";
     return req;
 }
