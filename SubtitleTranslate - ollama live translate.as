@@ -42,8 +42,6 @@ const string CONTEXT_PROMPT_BASE =
 "{{optional_reference_context}}\n"
 "\n";
 
-const string USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
-
 // ---- runtime config ----
 // modelName + apiKey are saved by potplayer login dialog
 // apiFormat + customEndpoint require editing this file
@@ -62,28 +60,32 @@ class Config {
     int contextLength = 4096;
     // output token limit; ollama path does not send this
     int maxTokens = 512;
-    // watchdog budget per host call (Translate/ServerLogin); covers one
-    // request attempt plus at most one network-level retry and its sleep
-    int requestTimeoutMs = 60000;
     // reasoning
     bool enableThinking = false;
     string thinkStrength = "";   // empty or low/medium/high
     // context
     bool contextEnabled = true;
+    int contextMaxSize = 20;
     int contextCount = 7;
     string contextPrompt = CONTEXT_PROMPT_BASE;
-    // memory cache cap
+    // cache
+    bool cacheEnabled = false;
     int cacheMaxEntries = 500;
+    // transport: false = hosturlgetstring, true = httpclient (real status codes)
+    bool useHttpClient = false;
 
     string systemPrompt = SYSTEM_PROMPT_BASE;
     string userPrompt = USER_PROMPT_BASE;
 
     void Load() {
-        modelName = HostLoadString("selected_model_ollama", modelName);
+        modelName = HostLoadString("selected_model_ollama");
+        apiKey = HostLoadString("api_key_ollama");
+        customEndpoint = HostLoadString("custom_endpoint_ollama");
     }
 
     void Save() {
         HostSaveString("selected_model_ollama", modelName);
+        HostSaveString("custom_endpoint_ollama", customEndpoint);
     }
 }
 
@@ -118,7 +120,7 @@ string GetTitle() {
     return "{$CP949=Ollama translate$}{$CP950=Ollama translate$}{$CP936=Ollama translate$}{$CP0=Ollama translate$}";
 }
 
-string GetVersion() { return "3.1"; }
+string GetVersion() { return "3.0"; }
 
 string GetDesc() {
     return "https://github.com/Nuo27/Potplayer-Ollama-Translate";
@@ -141,7 +143,6 @@ string GetPasswordText() {
 }
 
 void OnInitialize() {
-    LoadUserConfig();
     // Uncomment HostOpenConsole() to inspect log output at runtime
     // HostOpenConsole();
     g_logger.Info("Ollama translation plugin initialized");
@@ -158,119 +159,158 @@ void OnFinalize() {
 // customEndpoint overrides per-format default url
 
 class ProviderInfo {
-    string kind;         // ollama | rest | openai | anthropic
-    string chatUrl;      // full url for chat completion
-    string tagsUrl;      // full url for model list
-    bool needsAuth;      // include any auth header
-    bool authIsBearer;   // true: bearer; false: x-api-key
-    string name;         // human-readable, for logging
-}
-
-// strip trailing slashes, then append the format's chat suffix
-// unless the url already contains it
-string ResolveChatEndpoint(const string &in raw, const string &in kind) {
-    string url = TrimString(raw);
-    if (url.empty()) return "";
-    while (url.length() > 0 && url.substr(url.length() - 1, 1) == "/") {
-        url = url.substr(0, url.length() - 1);
-    }
-
-    if (kind == "ollama") {
-        if (url.find("/api/chat") != -1) return url;
-        return url + "/api/chat";
-    }
-    if (kind == "rest") {
-        if (url.find("/api/v1/chat") != -1) return url;
-        return url + "/api/v1/chat";
-    }
-    if (kind == "openai") {
-        if (url.find("/chat/completions") != -1) return url;
-        if (url.length() >= 3 && url.substr(url.length() - 3, 3) == "/v1") {
-            return url + "/chat/completions";
-        }
-        return url + "/v1/chat/completions";
-    }
-    // anthropic
-    if (url.find("/messages") != -1) return url;
-    if (url.length() >= 3 && url.substr(url.length() - 3, 3) == "/v1") {
-        return url + "/messages";
-    }
-    return url + "/v1/messages";
-}
-
-// chat and models endpoints are paired per format
-string ModelsUrlFromChatUrl(const string &in chatUrl, const string &in kind) {
-    if (kind == "anthropic") return "";  // no list endpoint
-    string chatMarker = (kind == "ollama") ? "/api/chat"
-                      : (kind == "rest") ? "/api/v1/chat"
-                      : "/chat/completions";
-    string modelsMarker = (kind == "ollama") ? "/api/tags"
-                        : (kind == "rest") ? "/api/v1/models"
-                        : "/models";
-    string base = chatUrl;
-    int pos = base.find(chatMarker);
-    if (pos != -1) base = base.substr(0, uint(pos));
-    return base + modelsMarker;
-}
-
-// shape determined by config.apiformat
-ProviderInfo DetectProvider() {
-    ProviderInfo p;
-    p.kind = g_config.apiFormat;
-
-    if (p.kind == "ollama") {
-        if (g_config.apiKey.empty()) {
-            p.chatUrl = g_config.baseUrl + "/api/chat";
-            p.tagsUrl = g_config.baseUrl + "/api/tags";
-            p.needsAuth = false;
-        } else {
-            p.chatUrl = "https://ollama.com/api/chat";
-            p.tagsUrl = "https://ollama.com/api/tags";
-            p.needsAuth = true;
-        }
-        p.authIsBearer = true;
-        p.name = g_config.apiKey.empty() ? "Ollama Local" : "Ollama Cloud";
-    } else if (p.kind == "rest") {
-        p.chatUrl = "http://127.0.0.1:1234/api/v1/chat";
-        p.tagsUrl = "http://127.0.0.1:1234/api/v1/models";
-        p.needsAuth = !g_config.apiKey.empty();
-        p.authIsBearer = true;
-        p.name = "LM Studio REST";
-    } else if (p.kind == "openai") {
-        p.chatUrl = "http://127.0.0.1:1234/v1/chat/completions";
-        p.tagsUrl = "http://127.0.0.1:1234/v1/models";
-        p.needsAuth = !g_config.apiKey.empty();
-        p.authIsBearer = true;
-        p.name = "OpenAI-compat";
-    } else if (p.kind == "anthropic") {
-        p.chatUrl = "http://127.0.0.1:1234/v1/messages";
-        p.tagsUrl = "";  // no list endpoint
-        p.needsAuth = !g_config.apiKey.empty();
-        p.authIsBearer = false;  // x-api-key, not bearer
-        p.name = "Anthropic-compat";
-    } else {
-        // unknown format: fall back to ollama to avoid lockout
-        g_logger.Warn("Unknown apiFormat '" + p.kind + "', defaulting to ollama");
-        p.kind = "ollama";
-        p.chatUrl = g_config.baseUrl + "/api/chat";
-        p.tagsUrl = g_config.baseUrl + "/api/tags";
-        p.needsAuth = false;
-        p.authIsBearer = true;
-        p.name = "Ollama Local (fallback)";
-    }
-
-    if (!g_config.customEndpoint.empty()) {
-        p.chatUrl = ResolveChatEndpoint(g_config.customEndpoint, p.kind);
-        if (!p.tagsUrl.empty()) {
-            p.tagsUrl = ModelsUrlFromChatUrl(p.chatUrl, p.kind);
-        }
-    }
-
-    return p;
+    string kind;                   // ollama | rest | openai | anthropic
+    string chatUrl;                // full url for chat completion
+    string tagsUrl;                // full url for model list
+    bool needsAuth;                // include any auth header
+    bool authIsBearer;             // true: bearer; false: x-api-key
+    bool needsSystemTopLevel;      // anthropic: system in top field, not messages
+    string name;                   // human-readable, for logging
 }
 
 // ========================
-// http transport
+// endpoint normalizer
+// ========================
+// append correct suffix per format; host or full url both ok
+
+class EndpointNormalizer {
+    string Resolve(const string &in raw, const string &in apiFormat) {
+        string url = TrimString(raw);
+        if (url.empty()) return "";
+
+        // strip trailing slashes
+        while (url.length() > 0 && url.substr(url.length() - 1, 1) == "/") {
+            url = url.substr(0, url.length() - 1);
+        }
+
+        // already has chat endpoint; use as-is
+        if (apiFormat == "ollama") {
+            if (url.find("/api/chat") != -1) return url;
+        } else if (apiFormat == "rest") {
+            if (url.find("/api/v1/chat") != -1) return url;
+        } else if (apiFormat == "openai") {
+            if (url.find("/chat/completions") != -1) return url;
+        } else if (apiFormat == "anthropic") {
+            if (url.find("/v1/messages") != -1 || url.find("/messages") != -1) return url;
+        }
+
+        // default suffixes per format
+        if (apiFormat == "ollama") {
+            return url + "/api/chat";
+        } else if (apiFormat == "rest") {
+            return url + "/api/v1/chat";
+        } else if (apiFormat == "openai") {
+            // ends with /v1: append /chat/completions; else add /v1/chat/completions
+            if (url.length() >= 3 && url.substr(url.length() - 3, 3) == "/v1") {
+                return url + "/chat/completions";
+            }
+            return url + "/v1/chat/completions";
+        } else if (apiFormat == "anthropic") {
+            // ends with /v1: append /messages; else add /v1/messages
+            if (url.length() >= 3 && url.substr(url.length() - 3, 3) == "/v1") {
+                return url + "/messages";
+            }
+            return url + "/v1/messages";
+        }
+        return url;
+    }
+
+    string ResolveModelsList(const string &in chatUrl, const string &in apiFormat) {
+        // chat and models endpoints are paired per format
+        string chatMarker;
+        string modelsMarker;
+        if (apiFormat == "ollama") {
+            chatMarker = "/api/chat";
+            modelsMarker = "/api/tags";
+        } else if (apiFormat == "rest") {
+            chatMarker = "/api/v1/chat";
+            modelsMarker = "/api/v1/models";
+        } else if (apiFormat == "openai") {
+            chatMarker = "/chat/completions";
+            modelsMarker = "/models";
+        } else if (apiFormat == "anthropic") {
+            return "";  // no list endpoint
+        } else {
+            return "";
+        }
+
+        string base = chatUrl;
+        int pos = base.find(chatMarker);
+        if (pos != -1) base = base.substr(0, uint(pos));
+        return base + modelsMarker;
+    }
+}
+
+// ========================
+// provider detector
+// ========================
+// shape determined by config.apiformat
+
+class ProviderDetector {
+    ProviderInfo Detect() {
+        ProviderInfo p;
+        p.kind = g_config.apiFormat;
+
+        // lms rest, openai-compat, anthropic-compat default to local lm studio
+        if (p.kind == "ollama") {
+            if (g_config.apiKey.empty()) {
+                p.chatUrl = g_config.baseUrl + "/api/chat";
+                p.tagsUrl = g_config.baseUrl + "/api/tags";
+                p.needsAuth = false;
+            } else {
+                p.chatUrl = "https://ollama.com/api/chat";
+                p.tagsUrl = "https://ollama.com/api/tags";
+                p.needsAuth = true;
+            }
+            p.authIsBearer = true;
+            p.needsSystemTopLevel = false;
+            p.name = g_config.apiKey.empty() ? "Ollama Local" : "Ollama Cloud";
+        } else if (p.kind == "rest") {
+            p.chatUrl = "http://127.0.0.1:1234/api/v1/chat";
+            p.tagsUrl = "http://127.0.0.1:1234/api/v1/models";
+            p.needsAuth = !g_config.apiKey.empty();
+            p.authIsBearer = true;
+            p.needsSystemTopLevel = false;
+            p.name = "LM Studio REST";
+        } else if (p.kind == "openai") {
+            p.chatUrl = "http://127.0.0.1:1234/v1/chat/completions";
+            p.tagsUrl = "http://127.0.0.1:1234/v1/models";
+            p.needsAuth = !g_config.apiKey.empty();
+            p.authIsBearer = true;
+            p.needsSystemTopLevel = false;
+            p.name = "OpenAI-compat";
+        } else if (p.kind == "anthropic") {
+            p.chatUrl = "http://127.0.0.1:1234/v1/messages";
+            p.tagsUrl = "";  // no list endpoint
+            p.needsAuth = !g_config.apiKey.empty();
+            p.authIsBearer = false;  // x-api-key, not bearer
+            p.needsSystemTopLevel = true;
+            p.name = "Anthropic-compat";
+        } else {
+            // unknown format: fall back to ollama to avoid lockout
+            g_logger.Warn("Unknown apiFormat '" + p.kind + "', defaulting to ollama");
+            p.kind = "ollama";
+            p.chatUrl = g_config.baseUrl + "/api/chat";
+            p.tagsUrl = g_config.baseUrl + "/api/tags";
+            p.needsAuth = false;
+            p.authIsBearer = true;
+            p.needsSystemTopLevel = false;
+            p.name = "Ollama Local (fallback)";
+        }
+
+        if (!g_config.customEndpoint.empty()) {
+            p.chatUrl = g_endpointNormalizer.Resolve(g_config.customEndpoint, p.kind);
+            if (!p.tagsUrl.empty()) {
+                p.tagsUrl = g_endpointNormalizer.ResolveModelsList(p.chatUrl, p.kind);
+            }
+        }
+
+        return p;
+    }
+}
+
+// ========================
+// http response
 // ========================
 
 class Response {
@@ -278,320 +318,489 @@ class Response {
     string body = "";
 }
 
-Response DoSend(const string &in url, const string &in header, const string &in body, int timeoutMs = -1) {
-    HostIncTimeOut(timeoutMs < 0 ? g_config.requestTimeoutMs : timeoutMs);
-    Response r;
-    HttpClient client;
-    if (!client.Open(url, USER_AGENT, header, body, true)) {
-        r.status = 0;
-        r.body = "";
-        return r;
+// ========================
+// text cleaner
+// ========================
+
+class TextCleaner {
+    string Normalize(const string &in t) {
+        string s = TrimString(t);
+        while (s.find("  ") != -1) s.replace("  ", " ");
+        return s;
     }
-    r.status = client.GetStatus();
-    r.body = client.GetContent();
-    return r;
+
+    bool IsTranslatable(const string &in t) {
+        string s = TrimString(t);
+        if (s.empty()) return false;
+
+        // skip set covers ascii whitespace, digits, punctuation
+        string skipChars = " .,;:!?\"'-()[]{}<>/*+=~`@#$%^&|\\\n\r\t";
+        uint len = s.length();
+        for (uint i = 0; i < len; i++) {
+            string ch = s.substr(i, 1);
+            if (ch >= "0" && ch <= "9") continue;
+            if (skipChars.find(ch) != -1) continue;
+            return true;
+        }
+        return false;
+    }
 }
 
-Response SendRequest(const string &in url, const string &in header, const string &in body) {
-    uint started = HostGetTickCount();
-    Response r = DoSend(url, header, body);
-    // status 0 = no usable HTTP response (dns/connect/send failure);
-    // deterministic API errors (4xx/5xx) are final and not retried
-    if (r.status != 0) return r;
+// ========================
+// http transport
+// ========================
 
-    int64 budgetLeft = int64(g_config.requestTimeoutMs) - int64(HostGetTickCount() - started) - 500;
-    if (budgetLeft <= 0) {
-        g_logger.Warn("Network failure (status=0), timeout budget exhausted, skip retry");
+class HttpTransport {
+    string userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
+
+    Response SendWithRetry(const string &in url, const string &in header, const string &in body) {
+        Response r = Send(url, header, body);
+        if (ShouldRetry(r)) {
+            g_logger.Warn("Transient failure (status=" + r.status + "), retrying once...");
+            HostSleep(500);
+            r = Send(url, header, body);
+        }
         return r;
     }
-    g_logger.Warn("Network failure (status=0), retrying once...");
-    HostSleep(500);
-    // top up only the unused remainder so attempt + sleep + retry fit one budget
-    HostIncTimeOut(int(budgetLeft));
-    r = DoSend(url, header, body, 0);
-    return r;
+
+    Response Send(const string &in url, const string &in header, const string &in body) {
+        if (g_config.useHttpClient) return SendViaHttpClient(url, header, body);
+        return SendViaHostUrlGetString(url, header, body);
+    }
+
+    Response SendViaHostUrlGetString(const string &in url, const string &in header, const string &in body) {
+        HostIncTimeOut(15000);
+        Response r;
+        string bodyOut = HostUrlGetString(url, userAgent, header, body);
+        r.body = bodyOut;
+        r.status = bodyOut.empty() ? 0 : 200;
+        return r;
+    }
+
+    Response SendViaHttpClient(const string &in url, const string &in header, const string &in body) {
+        HostIncTimeOut(15000);
+        Response r;
+        HttpClient client;
+        bool ok = client.Open(url, userAgent, header, body, true);
+        if (!ok) {
+            r.status = 0;
+            r.body = "";
+            return r;
+        }
+        r.status = client.GetStatus();
+        r.body = client.GetContent();
+        return r;
+    }
+
+    bool ShouldRetry(const Response &in r) {
+        if (r.status == 0) return true;        // network failure
+        if (r.status >= 500) return true;      // server error
+        if (r.status == 429) return true;      // rate limit
+        // skip 200 with body-error; those are permanent
+        return false;
+    }
+
+    bool HasErrorField(const string &in body) {
+        if (body.empty()) return false;
+        JsonReader reader;
+        JsonValue root;
+        if (!reader.parse(body, root)) return false;
+        if (!root.isObject()) return false;
+        JsonValue err = root["error"];
+        return !err.isNull();
+    }
 }
 
 // ========================
 // context history
 // ========================
-// capped at contextCount; the last entries are the prompt context
 
-array<string> g_history;
+class ContextHistory {
+    array<string> history;
 
-void AddHistoryEntry(const string &in source, const string &in translation) {
-    if (!g_config.contextEnabled || source.empty()) return;
-    g_history.insertLast(source + " ⇒ " + translation);
-    if (g_history.length() > uint(g_config.contextCount)) {
-        g_history.removeAt(0);
+    void AddEntry(const string &in source, const string &in translation) {
+        if (!g_config.contextEnabled || source.empty()) return;
+        string entry = source + " ⇒ " + translation;
+        history.insertLast(entry);
+        if (history.length() > uint(g_config.contextMaxSize)) {
+            history.removeAt(0);
+        }
+    }
+
+    string GetContext() {
+        if (!g_config.contextEnabled || history.length() == 0) return "";
+        string historyBlock = "";
+        int startIdx = max(0, int(history.length()) - g_config.contextCount);
+        for (int i = startIdx; i < int(history.length()); ++i) {
+            historyBlock += history[i] + "\n";
+        }
+        return historyBlock;
     }
 }
 
-string GetHistoryContext() {
-    if (!g_config.contextEnabled || g_history.length() == 0) return "";
-    string block = "";
-    for (uint i = 0; i < g_history.length(); i++) {
-        block += g_history[i] + "\n";
+// ========================
+// translation cache
+// ========================
+
+class TranslationCache {
+    dictionary mem;
+    array<string> lru;
+    bool diskEnabled = false;
+    int maxEntries = 500;
+    string iniFilename = "ollama_tr_cache.ini";
+    string section = "t";
+    bool loaded = false;
+
+    string ComputeKey(const string &in text, const string &in src, const string &in dst, const string &in model) {
+        return HostHashSHA256(text + "|" + src + "|" + dst + "|" + model);
     }
-    return block;
-}
 
-// ========================
-// translation cache (memory only, lru)
-// ========================
+    bool TryGet(const string &in key, string &out val) {
+        if (!loaded) Load();
+        if (mem.exists(key)) {
+            val = string(mem[key]);
+            return true;
+        }
+        return false;
+    }
 
-dictionary g_cacheMem;
-array<string> g_cacheLru;
+    void Set(const string &in key, const string &in val) {
+        if (!loaded) Load();
+        if (mem.exists(key)) {
+            mem[key] = val;
+            return;
+        }
+        if (int(mem.getSize()) >= maxEntries) EvictOldest();
+        mem[key] = val;
+        lru.insertLast(key);
+        if (diskEnabled) Save();
+    }
 
-string CacheKey(const string &in text, const string &in src, const string &in dst, const string &in model) {
-    return HostHashSHA256(text + "|" + src + "|" + dst + "|" + model);
-}
+    void EvictOldest() {
+        if (lru.length() == 0) return;
+        string oldest = lru[0];
+        lru.removeAt(0);
+        mem.delete(oldest);
+    }
 
-bool CacheTryGet(const string &in key, string &out val) {
-    if (g_cacheMem.exists(key)) {
-        val = string(g_cacheMem[key]);
-        // refresh recency so frequently hit entries survive eviction
-        for (uint i = 0; i < g_cacheLru.length(); i++) {
-            if (g_cacheLru[i] == key) {
-                g_cacheLru.removeAt(i);
-                g_cacheLru.insertLast(key);
-                break;
+    void Load() {
+        loaded = true;
+        diskEnabled = g_config.cacheEnabled;
+        maxEntries = g_config.cacheMaxEntries;
+        if (!diskEnabled) {
+            g_logger.Info("Cache: memory-only mode (disk disabled)");
+            return;
+        }
+
+        IniFile ini;
+        if (!ini.Open(iniFilename)) {
+            g_logger.Info("Cache: no existing disk file, starting fresh");
+            return;
+        }
+        array<string> keys;
+        ini.GetItems(section, keys);
+        for (uint i = 0; i < keys.length(); i++) {
+            string key = keys[i];
+            bool ok = false;
+            string val = ini.GetProfileString(section, key, "", ok);
+            if (ok && !val.empty()) {
+                mem[key] = UnescapeIniValue(val);
+                lru.insertLast(key);
             }
         }
-        return true;
+        g_logger.Info("Cache: loaded " + mem.getSize() + " entries from disk");
     }
-    return false;
-}
 
-void CacheSet(const string &in key, const string &in val) {
-    if (g_cacheMem.exists(key)) {
-        g_cacheMem[key] = val;
-        return;
+    void Save() {
+        if (!diskEnabled) return;
+        IniFile ini;
+        ini.Open(iniFilename);
+        ini.ClearSection(section);
+        for (uint i = 0; i < lru.length(); i++) {
+            string key = lru[i];
+            string val = string(mem[key]);
+            ini.WriteProfileString(section, key, EscapeIniValue(val));
+        }
+        if (!ini.Save(iniFilename)) {
+            g_logger.Warn("Cache: failed to save disk file");
+        }
     }
-    if (int(g_cacheMem.getSize()) >= g_config.cacheMaxEntries && g_cacheLru.length() > 0) {
-        g_cacheMem.delete(g_cacheLru[0]);
-        g_cacheLru.removeAt(0);
+
+    string EscapeIniValue(const string &in s) {
+        string r = s;
+        r.replace("\\", "\\\\");
+        r.replace("\n", "\\n");
+        r.replace("\r", "\\r");
+        r.replace("\t", "\\t");
+        return r;
     }
-    g_cacheMem[key] = val;
-    g_cacheLru.insertLast(key);
+
+    string UnescapeIniValue(const string &in s) {
+        string r = s;
+        r.replace("\\t", "\t");
+        r.replace("\\r", "\r");
+        r.replace("\\n", "\n");
+        r.replace("\\\\", "\\");
+        return r;
+    }
 }
 
 // ========================
 // request builders
 // ========================
+// duck-typed: each builder exposes Build(escModel, sys, user)
+// adding a new format = new builder + branch in BuildTranslationRequest
 
-string OllamaThinkValue() {
-    if (!g_config.enableThinking) return "false";
-    if (g_config.thinkStrength.empty()) return "true";
-    return "\"" + g_config.thinkStrength + "\"";
+class OllamaRequestBuilder {
+    string Build(const string &in escapedModel, const string &in sysContent, const string &in userContent) {
+        string messages = "[{\"role\":\"system\",\"content\":\"" + EscapeJsonString(sysContent)
+             + "\"},{\"role\":\"user\",\"content\":\"" + EscapeJsonString(userContent) + "\"}]";
+        string req = "{\"model\":\"" + escapedModel + "\",\"messages\":" + messages;
+
+        // options: num_ctx (when set) + temperature + top_p
+        string opts;
+        if (g_config.contextLength > 0) {
+            opts = ",\"options\":{\"num_ctx\":" + g_config.contextLength
+                 + ",\"temperature\":" + g_config.temperature
+                 + ",\"top_p\":" + g_config.topP + "}";
+        } else {
+            opts = ",\"options\":{\"temperature\":" + g_config.temperature
+                 + ",\"top_p\":" + g_config.topP + "}";
+        }
+        req += opts;
+
+        // always emit think to avoid qwen3 default-think timeout
+        req += ",\"think\":" + GetOllamaThinkValue();
+        req += ",\"stream\":false}";
+        return req;
+    }
+
+    string GetOllamaThinkValue() {
+        if (!g_config.enableThinking) return "false";
+        if (g_config.thinkStrength.empty()) return "true";
+        return "\"" + g_config.thinkStrength + "\"";
+    }
 }
 
-string BuildOllamaRequest(const string &in escapedModel, const string &in sysContent, const string &in userContent) {
-    string messages = "[{\"role\":\"system\",\"content\":\"" + EscapeJsonString(sysContent)
-         + "\"},{\"role\":\"user\",\"content\":\"" + EscapeJsonString(userContent) + "\"}]";
-    string req = "{\"model\":\"" + escapedModel + "\",\"messages\":" + messages;
+class LMSRestRequestBuilder {
+    // lms rest v1: input + system_prompt top-level + flat fields
+    string Build(const string &in escapedModel, const string &in sysContent, const string &in userContent) {
+        string req = "{\"model\":\"" + escapedModel
+             + "\",\"input\":\"" + EscapeJsonString(userContent)
+             + "\",\"system_prompt\":\"" + EscapeJsonString(sysContent)
+             + "\",\"temperature\":" + g_config.temperature
+             + ",\"top_p\":" + g_config.topP
+             + ",\"max_output_tokens\":" + g_config.maxTokens;
+        if (g_config.contextLength > 0) {
+            req += ",\"context_length\":" + g_config.contextLength;
+        }
+        req += ",\"reasoning\":\"" + GetRestReasoningValue() + "\"";
+        req += ",\"stream\":false}";
+        return req;
+    }
 
-    // options: num_ctx (when set) + num_predict (when set) + temperature + top_p
-    if (g_config.contextLength > 0) {
-        req += ",\"options\":{\"num_ctx\":" + g_config.contextLength
-             + (g_config.maxTokens > 0 ? ",\"num_predict\":" + g_config.maxTokens : "")
+    string GetRestReasoningValue() {
+        if (!g_config.enableThinking) return "off";
+        if (g_config.thinkStrength.empty()) return "on";
+        return "\"" + g_config.thinkStrength + "\"";
+    }
+}
+
+class OpenAIRequestBuilder {
+    // openai: messages array + top-level params, max_completion_tokens
+    string Build(const string &in escapedModel, const string &in sysContent, const string &in userContent) {
+        string messages = "[{\"role\":\"system\",\"content\":\"" + EscapeJsonString(sysContent)
+             + "\"},{\"role\":\"user\",\"content\":\"" + EscapeJsonString(userContent) + "\"}]";
+        string req = "{\"model\":\"" + escapedModel + "\",\"messages\":" + messages
+             + ",\"max_completion_tokens\":" + g_config.maxTokens
              + ",\"temperature\":" + g_config.temperature
-             + ",\"top_p\":" + g_config.topP + "}";
-    } else {
-        req += ",\"options\":{"
-             + (g_config.maxTokens > 0 ? "\"num_predict\":" + g_config.maxTokens + "," : "")
-             + "\"temperature\":" + g_config.temperature
-             + ",\"top_p\":" + g_config.topP + "}";
+             + ",\"top_p\":" + g_config.topP
+             + ",\"reasoning_effort\":\"" + GetOpenAIReasoningEffortValue() + "\""
+             + ",\"stream\":false}";
+        return req;
     }
 
-    // always emit think to avoid qwen3 default-think timeout
-    req += ",\"think\":" + OllamaThinkValue();
-    // local only: keep the model resident so a playback pause does not
-    // force a model reload (and a watchdog timeout) on the next subtitle
-    if (g_config.apiKey.empty()) {
-        req += ",\"keep_alive\":\"30m\"";
+    string GetOpenAIReasoningEffortValue() {
+        if (!g_config.enableThinking) return "none";
+        if (g_config.thinkStrength.empty()) return "medium";
+        return g_config.thinkStrength;
     }
-    req += ",\"stream\":false}";
-    return req;
 }
 
-string RestReasoningValue() {
-    if (!g_config.enableThinking) return "off";
-    if (g_config.thinkStrength.empty()) return "on";
-    // caller wraps this in quotes; return the bare value so the JSON stays valid
-    return g_config.thinkStrength;
-}
-
-// lms rest v1: input + system_prompt top-level + flat fields
-string BuildRestRequest(const string &in escapedModel, const string &in sysContent, const string &in userContent) {
-    string req = "{\"model\":\"" + escapedModel
-         + "\",\"input\":\"" + EscapeJsonString(userContent)
-         + "\",\"system_prompt\":\"" + EscapeJsonString(sysContent)
-         + "\",\"temperature\":" + g_config.temperature
-         + ",\"top_p\":" + g_config.topP
-         + ",\"max_output_tokens\":" + g_config.maxTokens;
-    if (g_config.contextLength > 0) {
-        req += ",\"context_length\":" + g_config.contextLength;
+class AnthropicRequestBuilder {
+    // anthropic: system top-level, max_tokens required
+    string Build(const string &in escapedModel, const string &in sysContent, const string &in userContent) {
+        string req = "{\"model\":\"" + escapedModel
+             + "\",\"system\":\"" + EscapeJsonString(sysContent)
+             + "\",\"max_tokens\":" + g_config.maxTokens
+             + ",\"messages\":[{\"role\":\"user\",\"content\":\""
+             + EscapeJsonString(userContent) + "\"}]"
+             + ",\"temperature\":" + g_config.temperature
+             + ",\"thinking\":" + GetAnthropicThinkingValue()
+             + "}";
+        return req;
     }
-    req += ",\"reasoning\":\"" + RestReasoningValue() + "\"";
-    req += ",\"stream\":false}";
-    return req;
-}
 
-string OpenAIReasoningEffortValue() {
-    if (!g_config.enableThinking) return "none";
-    if (g_config.thinkStrength.empty()) return "medium";
-    return g_config.thinkStrength;
-}
-
-// openai: messages array + top-level params, max_completion_tokens
-string BuildOpenAIRequest(const string &in escapedModel, const string &in sysContent, const string &in userContent) {
-    string messages = "[{\"role\":\"system\",\"content\":\"" + EscapeJsonString(sysContent)
-         + "\"},{\"role\":\"user\",\"content\":\"" + EscapeJsonString(userContent) + "\"}]";
-    return "{\"model\":\"" + escapedModel + "\",\"messages\":" + messages
-         + ",\"max_completion_tokens\":" + g_config.maxTokens
-         + ",\"temperature\":" + g_config.temperature
-         + ",\"top_p\":" + g_config.topP
-         + ",\"reasoning_effort\":\"" + OpenAIReasoningEffortValue() + "\""
-         + ",\"stream\":false}";
-}
-
-string AnthropicThinkingValue() {
-    if (!g_config.enableThinking) return "{\"type\":\"disabled\"}";
-    // anthropic requires max_tokens > budget_tokens >= 1
-    int maxTok = g_config.maxTokens > 2 ? g_config.maxTokens : 2;
-    int budget = maxTok - 1;
-    if (budget > 1024) budget = 1024;
-    return "{\"type\":\"enabled\",\"budget_tokens\":" + budget + "}";
-}
-
-// anthropic: system top-level, max_tokens required
-string BuildAnthropicRequest(const string &in escapedModel, const string &in sysContent, const string &in userContent) {
-    int maxTok = g_config.maxTokens > 1 ? g_config.maxTokens : 1;
-    // thinking mode requires temperature exactly 1
-    string temperature = g_config.enableThinking ? "1.0" : "" + g_config.temperature;
-    return "{\"model\":\"" + escapedModel
-         + "\",\"system\":\"" + EscapeJsonString(sysContent)
-         + "\",\"max_tokens\":" + maxTok
-         + ",\"messages\":[{\"role\":\"user\",\"content\":\""
-         + EscapeJsonString(userContent) + "\"}]"
-         + ",\"temperature\":" + temperature
-         + ",\"thinking\":" + AnthropicThinkingValue()
-         + "}";
+    string GetAnthropicThinkingValue() {
+        if (!g_config.enableThinking) return "{\"type\":\"disabled\"}";
+        // budget_tokens required when enabled; map strength to budgets
+        int budget = g_config.contextLength / 2;
+        if (g_config.thinkStrength == "low") budget = 1024;
+        else if (g_config.thinkStrength == "medium") budget = 2048;
+        else if (g_config.thinkStrength == "high") budget = 4096;
+        return "{\"type\":\"enabled\",\"budget_tokens\":" + budget + "}";
+    }
 }
 
 // ========================
 // response parsers
 // ========================
 
-string ExtractOllamaText(const string &in body) {
-    JsonReader reader;
-    JsonValue root;
-    if (!reader.parse(body, root)) return "";
-    JsonValue msg = root["message"];
-    if (!msg.isObject()) return "";
-    JsonValue content = msg["content"];
-    if (!content.isString()) return "";
-    return content.asString();
-}
-
-// lms rest: find first output[] item with type=="message"
-string ExtractRestText(const string &in body) {
-    JsonReader reader;
-    JsonValue root;
-    if (!reader.parse(body, root)) return "";
-    JsonValue output = root["output"];
-    if (!output.isArray()) return "";
-    for (int i = 0; i < output.size(); i++) {
-        JsonValue item = output[i];
-        if (item.isObject() && item["type"].isString()
-            && item["type"].asString() == "message") {
-            JsonValue content = item["content"];
-            if (content.isString()) return content.asString();
-        }
+class OllamaResponseParser {
+    string Extract(const string &in body) {
+        JsonReader reader;
+        JsonValue root;
+        if (!reader.parse(body, root)) return "";
+        JsonValue msg = root["message"];
+        if (!msg.isObject()) return "";
+        JsonValue content = msg["content"];
+        if (!content.isString()) return "";
+        return content.asString();
     }
-    return "";
 }
 
-string ExtractOpenAIText(const string &in body) {
-    JsonReader reader;
-    JsonValue root;
-    if (!reader.parse(body, root)) return "";
-    JsonValue choices = root["choices"];
-    if (!choices.isArray() || choices.size() == 0) return "";
-    JsonValue msg = choices[0]["message"];
-    if (!msg.isObject()) return "";
-    JsonValue content = msg["content"];
-    if (!content.isString()) return "";
-    return content.asString();
-}
-
-// anthropic: find first content[] item with type=="text"
-string ExtractAnthropicText(const string &in body) {
-    JsonReader reader;
-    JsonValue root;
-    if (!reader.parse(body, root)) return "";
-    JsonValue content = root["content"];
-    if (!content.isArray() || content.size() == 0) return "";
-    for (int i = 0; i < content.size(); i++) {
-        JsonValue item = content[i];
-        if (item.isObject() && item["type"].isString()
-            && item["type"].asString() == "text") {
-            JsonValue text = item["text"];
-            if (text.isString()) return text.asString();
+class LMSRestResponseParser {
+    // lms rest: find first output[] item with type=="message"
+    string Extract(const string &in body) {
+        JsonReader reader;
+        JsonValue root;
+        if (!reader.parse(body, root)) return "";
+        JsonValue output = root["output"];
+        if (!output.isArray()) return "";
+        for (int i = 0; i < output.size(); i++) {
+            JsonValue item = output[i];
+            if (item.isObject() && item["type"].isString()
+                && item["type"].asString() == "message") {
+                JsonValue content = item["content"];
+                if (content.isString()) return content.asString();
+            }
         }
+        return "";
     }
-    return "";
+}
+
+class OpenAIResponseParser {
+    string Extract(const string &in body) {
+        JsonReader reader;
+        JsonValue root;
+        if (!reader.parse(body, root)) return "";
+        JsonValue choices = root["choices"];
+        if (!choices.isArray() || choices.size() == 0) return "";
+        JsonValue msg = choices[0]["message"];
+        if (!msg.isObject()) return "";
+        JsonValue content = msg["content"];
+        if (!content.isString()) return "";
+        return content.asString();
+    }
+}
+
+class AnthropicResponseParser {
+    // anthropic: find first content[] item with type=="text"
+    string Extract(const string &in body) {
+        JsonReader reader;
+        JsonValue root;
+        if (!reader.parse(body, root)) return "";
+        JsonValue content = root["content"];
+        if (!content.isArray() || content.size() == 0) return "";
+        for (int i = 0; i < content.size(); i++) {
+            JsonValue item = content[i];
+            if (item.isObject() && item["type"].isString()
+                && item["type"].asString() == "text") {
+                JsonValue text = item["text"];
+                if (text.isString()) return text.asString();
+            }
+        }
+        return "";
+    }
 }
 
 // ========================
-// globals
+// api dispatcher
+// ========================
+// thin dispatcher; format-specific logic lives in builders/parsers
+// new format = new builder + new parser + branch in BuildTranslationRequest + ExtractTranslatedText
+
+class Api {
+    string userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
+    string contentType = "Content-Type: application/json";
+
+    Response SendTranslationRequest(const string &in requestData) {
+        string url = BuildUrl();
+        string header = BuildHeader();
+
+        g_logger.Debug("request url   : " + url);
+        g_logger.Debug("request header: " + header);
+        g_logger.Debug("request data  : " + requestData);
+
+        return g_httpTransport.SendWithRetry(url, header, requestData);
+    }
+
+    string BuildTranslationRequest(const string &in text, const string &in srcLang, const string &in dstLang) {
+        string context = g_config.contextEnabled ? g_contextHistory.GetContext() : "";
+        string sysContent = ApplyTemplate(g_config.systemPrompt, text, srcLang, dstLang, context);
+        string userContent = ApplyTemplate(g_config.userPrompt, text, srcLang, dstLang, context);
+        string escapedModel = EscapeJsonString(g_config.modelName);
+
+        if (g_provider.kind == "ollama") {
+            OllamaRequestBuilder b;
+            return b.Build(escapedModel, sysContent, userContent);
+        } else if (g_provider.kind == "rest") {
+            LMSRestRequestBuilder b;
+            return b.Build(escapedModel, sysContent, userContent);
+        } else if (g_provider.kind == "openai") {
+            OpenAIRequestBuilder b;
+            return b.Build(escapedModel, sysContent, userContent);
+        } else if (g_provider.kind == "anthropic") {
+            AnthropicRequestBuilder b;
+            return b.Build(escapedModel, sysContent, userContent);
+        }
+        // fallback
+        OllamaRequestBuilder b;
+        return b.Build(escapedModel, sysContent, userContent);
+    }
+
+    string BuildUrl() {
+        return g_provider.chatUrl;
+    }
+
+    string BuildHeader() {
+        string header = contentType + "\nAccept: application/json";
+        if (g_provider.needsAuth && !g_config.apiKey.empty()) {
+            if (g_provider.authIsBearer) {
+                header += "\nAuthorization: Bearer " + g_config.apiKey;
+            } else {
+                // anthropic: x-api-key + required version
+                header += "\nx-api-key: " + g_config.apiKey
+                       + "\nanthropic-version: 2023-06-01";
+            }
+        }
+        return header;
+    }
+}
+
+// ========================
+// global instances
 // ========================
 Config g_config;
+ContextHistory g_contextHistory;
+TranslationCache g_cache;
+Api g_api;
+HttpTransport g_httpTransport;
+TextCleaner g_textCleaner;
+ProviderDetector g_providerDetector;
+EndpointNormalizer g_endpointNormalizer;
 ProviderInfo g_provider;
 bool g_isPluginActive = true;
-bool g_langErrorShown = false;
-
-// ========================
-// request assembly & send
-// ========================
-
-string BuildHeader() {
-    string header = "Content-Type: application/json\nAccept: application/json";
-    if (g_provider.needsAuth && !g_config.apiKey.empty()) {
-        if (g_provider.authIsBearer) {
-            header += "\nAuthorization: Bearer " + g_config.apiKey;
-        } else {
-            // anthropic: x-api-key + required version
-            header += "\nx-api-key: " + g_config.apiKey
-                   + "\nanthropic-version: 2023-06-01";
-        }
-    }
-    return header;
-}
-
-string BuildTranslationRequest(const string &in text, const string &in srcLang, const string &in dstLang) {
-    string context = g_config.contextEnabled ? GetHistoryContext() : "";
-    string sysContent = ApplyTemplate(g_config.systemPrompt, text, srcLang, dstLang, context);
-    string userContent = ApplyTemplate(g_config.userPrompt, text, srcLang, dstLang, context);
-    string escapedModel = EscapeJsonString(g_config.modelName);
-
-    if (g_provider.kind == "rest") {
-        return BuildRestRequest(escapedModel, sysContent, userContent);
-    } else if (g_provider.kind == "openai") {
-        return BuildOpenAIRequest(escapedModel, sysContent, userContent);
-    } else if (g_provider.kind == "anthropic") {
-        return BuildAnthropicRequest(escapedModel, sysContent, userContent);
-    }
-    return BuildOllamaRequest(escapedModel, sysContent, userContent);
-}
-
-Response SendTranslationRequest(const string &in requestData) {
-    g_logger.Debug("request url   : " + g_provider.chatUrl);
-    g_logger.Debug("request header: " + BuildHeader());
-    g_logger.Debug("request data  : " + requestData);
-    return SendRequest(g_provider.chatUrl, BuildHeader(), requestData);
-}
 
 // ========================
 // user config & model validation
@@ -600,8 +809,9 @@ void LoadUserConfig() {
     g_config.Load();
     g_logger.Info("apiFormat: " + g_config.apiFormat);
     g_logger.Info("Loaded model: " + g_config.modelName);
+    g_logger.Info("Loaded API Key: " + (g_config.apiKey.empty() ? "(not set)" : "(set)"));
     if (!g_config.customEndpoint.empty()) {
-        g_logger.Info("Custom endpoint (from file): " + g_config.customEndpoint);
+        g_logger.Info("Loaded custom endpoint: " + g_config.customEndpoint);
     }
 }
 
@@ -635,34 +845,63 @@ bool TrySelectModelFromList(const array<string> &in availableModels, const strin
 
 array<string> ParseModelsList(const string &in body, const string &in apiFormat) {
     array<string> result;
-    if (apiFormat == "anthropic") return result;
+    if (body.empty()) {
+        g_logger.Warn("Models list response body is empty");
+        return result;
+    }
 
     JsonReader reader;
     JsonValue root;
-    if (!reader.parse(NormalizeJsonResponse(body), root)) {
+    string normalized = NormalizeJsonResponse(body);
+    if (!reader.parse(normalized, root)) {
         g_logger.Warn("Failed to parse models list JSON");
         LogModelsListPreview(body);
         return result;
     }
 
-    // ollama /api/tags: {"models":[{"name":...}]}; openai-compat: {"data":[{"id":...}]}
-    string listKey = (apiFormat == "ollama") ? "models" : "data";
-    string idKey   = (apiFormat == "ollama") ? "name"  : "id";
-    JsonValue list = root[listKey];
-    if (!list.isArray()) {
-        g_logger.Warn("No model list array found in response (expected: " + listKey + ")");
+    // try common list and id field names per server shape
+    array<string> listKeys;
+    array<string> idKeys;
+    if (apiFormat == "ollama") {
+        listKeys.insertLast("models");
+        idKeys.insertLast("name"); idKeys.insertLast("id"); idKeys.insertLast("model");
+    } else if (apiFormat == "anthropic") {
+        return result;
+    } else {
+        listKeys.insertLast("data"); listKeys.insertLast("models"); listKeys.insertLast("items");
+        idKeys.insertLast("key"); idKeys.insertLast("id"); idKeys.insertLast("name"); idKeys.insertLast("model_id"); idKeys.insertLast("model");
+    }
+
+    JsonValue list;
+    bool listFound = false;
+    for (uint i = 0; i < listKeys.length(); i++) {
+        JsonValue v = root[listKeys[i]];
+        if (v.isArray()) {
+            list = v;
+            listFound = true;
+            break;
+        }
+    }
+    if (!listFound) {
+        g_logger.Warn("No model list array found in response (tried: data/models/items)");
         LogModelsListPreview(body);
         return result;
     }
-    for (int j = 0; j < list.size(); j++) {
-        JsonValue m = list[j];
-        if (m.isObject() && m[idKey].isString()) {
-            result.insertLast(m[idKey].asString());
+
+    for (uint i = 0; i < idKeys.length(); i++) {
+        bool anyFound = false;
+        for (int j = 0; j < list.size(); j++) {
+            JsonValue m = list[j];
+            if (m.isObject() && m[idKeys[i]].isString()) {
+                result.insertLast(m[idKeys[i]].asString());
+                anyFound = true;
+            }
         }
+        if (anyFound) break;
     }
 
     if (result.length() == 0) {
-        g_logger.Warn("Models list parsed but no entries extracted (expected key: " + idKey + ")");
+        g_logger.Warn("Models list parsed but no entries extracted (tried: id/name/model_id/model)");
         LogModelsListPreview(body);
     }
     return result;
@@ -687,32 +926,6 @@ string FirstNModels(const array<string> &in models, int n) {
 // ========================
 // login flow
 // ========================
-// pre-load a local ollama model so the first real subtitle does not pay the
-// model-load latency; failures only log and never fail the login itself,
-// and the response is never stored in cache or history
-void WarmUpLocalOllama() {
-    if (g_provider.kind != "ollama" || !g_config.apiKey.empty()) return;
-
-    string req = "{\"model\":\"" + EscapeJsonString(g_config.modelName) + "\""
-         + ",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]"
-         + ",\"think\":false,\"stream\":false,\"keep_alive\":\"30m\"";
-    if (g_config.contextLength > 0) {
-        req += ",\"options\":{\"num_ctx\":" + g_config.contextLength + ",\"num_predict\":1}";
-    } else {
-        req += ",\"options\":{\"num_predict\":1}";
-    }
-
-    g_logger.Info("Warming up local ollama (loading model into memory)...");
-    HostIncTimeOut(120000);
-    Response r = DoSend(g_provider.chatUrl, BuildHeader(), req, 0);
-    if (r.status == 0 || r.body.empty()) {
-        g_logger.Warn("Warm-up request failed (status=" + r.status
-             + "); the first subtitle may be slow");
-    } else {
-        g_logger.Info("Warm-up done (status=" + r.status + ")");
-    }
-}
-
 void ParseLoginInput(string User, string Pass) {
     g_config.modelName = TrimString(User);
     string newApiKey = TrimString(Pass);
@@ -735,7 +948,7 @@ string ServerLogin(string User, string Pass) {
         return "400 Invalid custom endpoint (must start with http:// or https://)";
     }
 
-    g_provider = DetectProvider();
+    g_provider = g_providerDetector.Detect();
     g_logger.Info("Provider: " + g_provider.name);
     g_logger.Debug("chat URL: " + g_provider.chatUrl);
     g_logger.Debug("tags URL: " + g_provider.tagsUrl);
@@ -749,7 +962,8 @@ string ServerLogin(string User, string Pass) {
         return "200 ok";
     }
 
-    Response r = SendRequest(g_provider.tagsUrl, BuildHeader(), "");
+    string header = g_api.BuildHeader();
+    Response r = g_httpTransport.SendWithRetry(g_provider.tagsUrl, header, "");
 
     if (r.status == 0) {
         g_isPluginActive = false;
@@ -785,13 +999,13 @@ string ServerLogin(string User, string Pass) {
     g_config.Save();
     g_isPluginActive = true;
     g_logger.Info("Login ok — provider=" + g_provider.name + ", model=" + g_config.modelName);
-    WarmUpLocalOllama();
 
     return "200 ok";
 }
 
 void ServerLogout() {
     g_config.Save();
+    HostSaveString("api_key_ollama", "");
     g_logger.Info("Successfully logged out from Ollama translation plugin");
 }
 
@@ -820,16 +1034,12 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
     if (!g_isPluginActive) return "Plugin is not loaded normally, please check settings";
 
     if (!IsTargetLanguageValid(DstLang)) {
-        // one MessageBox per session; Translate is a per-subtitle hot path
-        if (!g_langErrorShown) {
-            g_langErrorShown = true;
-            ShowError("Target language not specified", "Translation Failed");
-        }
-        g_logger.Warn("Target language not specified; returning subtitle untranslated");
+        g_logger.Warn("Target language not specified");
+        ShowError("Target language not specified", "Translation Failed");
         return "";
     }
 
-    if (!IsTranslatable(Text)) {
+    if (!g_textCleaner.IsTranslatable(Text)) {
         g_logger.Debug("Skipping non-translatable input: " + Text);
         SrcLang = "UTF8";
         DstLang = "UTF8";
@@ -837,17 +1047,17 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
     }
 
     string srcLangCode = NormalizeLanguage(SrcLang);
-    string cacheKey = CacheKey(Text, srcLangCode, DstLang, g_config.modelName);
+    string cacheKey = g_cache.ComputeKey(Text, srcLangCode, DstLang, g_config.modelName);
     string cached;
-    if (CacheTryGet(cacheKey, cached)) {
+    if (g_cache.TryGet(cacheKey, cached)) {
         g_logger.Debug("Cache hit: " + Text);
         SrcLang = "UTF8";
         DstLang = "UTF8";
         return cached;
     }
 
-    string requestData = BuildTranslationRequest(Text, srcLangCode, DstLang);
-    Response resp = SendTranslationRequest(requestData);
+    string requestData = g_api.BuildTranslationRequest(Text, srcLangCode, DstLang);
+    Response resp = g_api.SendTranslationRequest(requestData);
     if (resp.status == 0 || resp.body.empty()) {
         g_logger.Warn("Translation failed (status=" + resp.status + "): " + Text);
         SrcLang = "UTF8";
@@ -868,8 +1078,8 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
         translatedText = "‫" + translatedText;
     }
 
-    CacheSet(cacheKey, translatedText);
-    AddHistoryEntry(Text, translatedText);
+    g_cache.Set(cacheKey, translatedText);
+    g_contextHistory.AddEntry(Text, translatedText);
 
     SrcLang = "UTF8";
     DstLang = "UTF8";
@@ -907,35 +1117,26 @@ string ExtractTranslatedText(const string response) {
     }
 
     // dispatch to format-specific parser
-    if (g_provider.kind == "rest") {
-        return ExtractRestText(response);
+    if (g_provider.kind == "ollama") {
+        OllamaResponseParser p;
+        return p.Extract(response);
+    } else if (g_provider.kind == "rest") {
+        LMSRestResponseParser p;
+        return p.Extract(response);
     } else if (g_provider.kind == "openai") {
-        return ExtractOpenAIText(response);
+        OpenAIResponseParser p;
+        return p.Extract(response);
     } else if (g_provider.kind == "anthropic") {
-        return ExtractAnthropicText(response);
+        AnthropicResponseParser p;
+        return p.Extract(response);
     }
-    return ExtractOllamaText(response);
+    OllamaResponseParser p;
+    return p.Extract(response);
 }
 
 // ========================
 // utilities
 // ========================
-
-bool IsTranslatable(const string &in t) {
-    string s = TrimString(t);
-    if (s.empty()) return false;
-
-    // skip set covers ascii whitespace, digits, punctuation
-    string skipChars = " .,;:!?\"'-()[]{}<>/*+=~`@#$%^&|\\\n\r\t";
-    uint len = s.length();
-    for (uint i = 0; i < len; i++) {
-        string ch = s.substr(i, 1);
-        if (ch >= "0" && ch <= "9") continue;
-        if (skipChars.find(ch) != -1) continue;
-        return true;
-    }
-    return false;
-}
 
 bool IsTargetLanguageValid(const string &in dst) {
     if (dst.empty()) return false;
@@ -974,6 +1175,7 @@ bool IsValidCustomEndpoint(const string &in endpoint) {
     return hasScheme;
 }
 
+int max(int a, int b) { return (a > b) ? a : b; }
 int min(int a, int b) { return (a < b) ? a : b; }
 
 string TrimString(const string &in text) {
@@ -1003,23 +1205,12 @@ string NormalizeJsonResponse(const string &in input) {
 }
 
 string EscapeJsonString(const string &in input) {
-    const string hex = "0123456789abcdef";
-    string output = "";
-    for (uint i = 0; i < input.length(); i++) {
-        int c = input[i];
-        if (c == '"')  { output += "\\\""; continue; }
-        if (c == '\\') { output += "\\\\"; continue; }
-        if (c == 0x0A) { output += "\\n"; continue; }
-        if (c == 0x0D) { output += "\\r"; continue; }
-        if (c == 0x09) { output += "\\t"; continue; }
-        if (c == 0x08) { output += "\\b"; continue; }
-        if (c == 0x0C) { output += "\\f"; continue; }
-        if (c < 0x20) {
-            output += "\\u00" + hex.substr(uint((c >> 4) & 0xF), 1) + hex.substr(uint(c & 0xF), 1);
-            continue;
-        }
-        output += input.substr(i, 1);
-    }
+    string output = input;
+    output.replace("\\", "\\\\");
+    output.replace("\"", "\\\"");
+    output.replace("\n", "\\n");
+    output.replace("\r", "\\r");
+    output.replace("\t", "\\t");
     return output;
 }
 
@@ -1040,6 +1231,22 @@ string RemoveThinkingTags(const string &in text) {
         if (closeBracket == -1) cur = closePos + 7;
         else cur = closeBracket + 1;
     }
+    return result;
+}
+
+array<string> SplitString(const string &in text, const string &in delimiter) {
+    array<string> result;
+    if (text.empty()) return result;
+    int start = 0;
+    int pos = text.findFirst(delimiter, start);
+    while (pos >= 0) {
+        string token = text.substr(uint(start), uint(pos - start));
+        if (!token.empty()) result.insertLast(token);
+        start = pos + int(delimiter.length());
+        pos = text.findFirst(delimiter, start);
+    }
+    string token = text.substr(uint(start));
+    if (!token.empty()) result.insertLast(token);
     return result;
 }
 
