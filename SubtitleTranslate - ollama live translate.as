@@ -678,6 +678,32 @@ string FirstNModels(const array<string> &in models, int n) {
 // ========================
 // login flow
 // ========================
+// pre-load a local ollama model so the first real subtitle does not pay the
+// model-load latency; failures only log and never fail the login itself,
+// and the response is never stored in cache or history
+void WarmUpLocalOllama() {
+    if (g_provider.kind != "ollama" || !g_config.apiKey.empty()) return;
+
+    string req = "{\"model\":\"" + EscapeJsonString(g_config.modelName) + "\""
+         + ",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]"
+         + ",\"think\":false,\"stream\":false,\"keep_alive\":\"30m\"";
+    if (g_config.contextLength > 0) {
+        req += ",\"options\":{\"num_ctx\":" + g_config.contextLength + ",\"num_predict\":1}";
+    } else {
+        req += ",\"options\":{\"num_predict\":1}";
+    }
+
+    g_logger.Info("Warming up local ollama (loading model into memory)...");
+    HostIncTimeOut(120000);
+    Response r = DoSend(g_provider.chatUrl, BuildHeader(), req, 0);
+    if (r.status == 0 || r.body.empty()) {
+        g_logger.Warn("Warm-up request failed (status=" + r.status
+             + "); the first subtitle may be slow");
+    } else {
+        g_logger.Info("Warm-up done (status=" + r.status + ")");
+    }
+}
+
 void ParseLoginInput(string User, string Pass) {
     g_config.modelName = TrimString(User);
     string newApiKey = TrimString(Pass);
@@ -750,6 +776,7 @@ string ServerLogin(string User, string Pass) {
     g_config.Save();
     g_isPluginActive = true;
     g_logger.Info("Login ok — provider=" + g_provider.name + ", model=" + g_config.modelName);
+    WarmUpLocalOllama();
 
     return "200 ok";
 }
