@@ -140,7 +140,7 @@ string GetUserText() {
 }
 
 string GetPasswordText() {
-    return "{$CP949=API Key:$}{$CP950=API Key:$}${$CP936=API Key:$}{$CP0=API Key:$}";
+    return "{$CP949=API Key:$}{$CP950=API Key:$}{$CP936=API Key:$}{$CP0=API Key:$}";
 }
 
 void OnInitialize() {
