@@ -62,6 +62,9 @@ class Config {
     int contextLength = 4096;
     // output token limit; ollama path does not send this
     int maxTokens = 512;
+    // watchdog budget per host call (Translate/ServerLogin); covers one
+    // request attempt plus at most one network-level retry and its sleep
+    int requestTimeoutMs = 60000;
     // reasoning
     bool enableThinking = false;
     string thinkStrength = "";   // empty or low/medium/high
@@ -277,8 +280,8 @@ class Response {
     string body = "";
 }
 
-Response DoSend(const string &in url, const string &in header, const string &in body) {
-    HostIncTimeOut(15000);
+Response DoSend(const string &in url, const string &in header, const string &in body, int timeoutMs = -1) {
+    HostIncTimeOut(timeoutMs < 0 ? g_config.requestTimeoutMs : timeoutMs);
     Response r;
     HttpClient client;
     if (!client.Open(url, USER_AGENT, header, body, true)) {
