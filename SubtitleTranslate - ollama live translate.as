@@ -452,11 +452,10 @@ string BuildOpenAIRequest(const string &in escapedModel, const string &in sysCon
 
 string AnthropicThinkingValue() {
     if (!g_config.enableThinking) return "{\"type\":\"disabled\"}";
-    // budget_tokens required when enabled; map strength to budgets
-    int budget = g_config.contextLength / 2;
-    if (g_config.thinkStrength == "low") budget = 1024;
-    else if (g_config.thinkStrength == "medium") budget = 2048;
-    else if (g_config.thinkStrength == "high") budget = 4096;
+    // anthropic requires max_tokens > budget_tokens >= 1
+    int maxTok = g_config.maxTokens > 2 ? g_config.maxTokens : 2;
+    int budget = maxTok - 1;
+    if (budget > 1024) budget = 1024;
     return "{\"type\":\"enabled\",\"budget_tokens\":" + budget + "}";
 }
 
