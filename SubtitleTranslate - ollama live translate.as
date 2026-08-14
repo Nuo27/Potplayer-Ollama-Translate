@@ -295,13 +295,22 @@ Response DoSend(const string &in url, const string &in header, const string &in 
 }
 
 Response SendRequest(const string &in url, const string &in header, const string &in body) {
+    uint started = HostGetTickCount();
     Response r = DoSend(url, header, body);
-    // single retry on transient failure: network error, 5xx, 429
-    if (r.status == 0 || r.status >= 500 || r.status == 429) {
-        g_logger.Warn("Transient failure (status=" + r.status + "), retrying once...");
-        HostSleep(500);
-        r = DoSend(url, header, body);
+    // status 0 = no usable HTTP response (dns/connect/send failure);
+    // deterministic API errors (4xx/5xx) are final and not retried
+    if (r.status != 0) return r;
+
+    int64 budgetLeft = int64(g_config.requestTimeoutMs) - int64(HostGetTickCount() - started) - 500;
+    if (budgetLeft <= 0) {
+        g_logger.Warn("Network failure (status=0), timeout budget exhausted, skip retry");
+        return r;
     }
+    g_logger.Warn("Network failure (status=0), retrying once...");
+    HostSleep(500);
+    // top up only the unused remainder so attempt + sleep + retry fit one budget
+    HostIncTimeOut(int(budgetLeft));
+    r = DoSend(url, header, body, 0);
     return r;
 }
 
