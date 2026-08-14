@@ -350,6 +350,14 @@ string CacheKey(const string &in text, const string &in src, const string &in ds
 bool CacheTryGet(const string &in key, string &out val) {
     if (g_cacheMem.exists(key)) {
         val = string(g_cacheMem[key]);
+        // refresh recency so frequently hit entries survive eviction
+        for (uint i = 0; i < g_cacheLru.length(); i++) {
+            if (g_cacheLru[i] == key) {
+                g_cacheLru.removeAt(i);
+                g_cacheLru.insertLast(key);
+                break;
+            }
+        }
         return true;
     }
     return false;
