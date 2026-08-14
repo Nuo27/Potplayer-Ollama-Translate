@@ -144,6 +144,7 @@ string GetPasswordText() {
 }
 
 void OnInitialize() {
+    LoadUserConfig();
     // Uncomment HostOpenConsole() to inspect log output at runtime
     // HostOpenConsole();
     g_logger.Info("Ollama translation plugin initialized");
