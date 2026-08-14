@@ -990,12 +990,23 @@ string NormalizeJsonResponse(const string &in input) {
 }
 
 string EscapeJsonString(const string &in input) {
-    string output = input;
-    output.replace("\\", "\\\\");
-    output.replace("\"", "\\\"");
-    output.replace("\n", "\\n");
-    output.replace("\r", "\\r");
-    output.replace("\t", "\\t");
+    const string hex = "0123456789abcdef";
+    string output = "";
+    for (uint i = 0; i < input.length(); i++) {
+        int c = input[i];
+        if (c == '"')  { output += "\\\""; continue; }
+        if (c == '\\') { output += "\\\\"; continue; }
+        if (c == 0x0A) { output += "\\n"; continue; }
+        if (c == 0x0D) { output += "\\r"; continue; }
+        if (c == 0x09) { output += "\\t"; continue; }
+        if (c == 0x08) { output += "\\b"; continue; }
+        if (c == 0x0C) { output += "\\f"; continue; }
+        if (c < 0x20) {
+            output += "\\u00" + hex.substr(uint((c >> 4) & 0xF), 1) + hex.substr(uint(c & 0xF), 1);
+            continue;
+        }
+        output += input.substr(i, 1);
+    }
     return output;
 }
 
