@@ -461,12 +461,15 @@ string AnthropicThinkingValue() {
 
 // anthropic: system top-level, max_tokens required
 string BuildAnthropicRequest(const string &in escapedModel, const string &in sysContent, const string &in userContent) {
+    int maxTok = g_config.maxTokens > 1 ? g_config.maxTokens : 1;
+    // thinking mode requires temperature exactly 1
+    string temperature = g_config.enableThinking ? "1.0" : "" + g_config.temperature;
     return "{\"model\":\"" + escapedModel
          + "\",\"system\":\"" + EscapeJsonString(sysContent)
-         + "\",\"max_tokens\":" + g_config.maxTokens
+         + "\",\"max_tokens\":" + maxTok
          + ",\"messages\":[{\"role\":\"user\",\"content\":\""
          + EscapeJsonString(userContent) + "\"}]"
-         + ",\"temperature\":" + g_config.temperature
+         + ",\"temperature\":" + temperature
          + ",\"thinking\":" + AnthropicThinkingValue()
          + "}";
 }
