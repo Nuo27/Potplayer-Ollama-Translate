@@ -79,14 +79,11 @@ class Config {
     string userPrompt = USER_PROMPT_BASE;
 
     void Load() {
-        modelName = HostLoadString("selected_model_ollama");
-        apiKey = HostLoadString("api_key_ollama");
-        customEndpoint = HostLoadString("custom_endpoint_ollama");
+        modelName = HostLoadString("selected_model_ollama", modelName);
     }
 
     void Save() {
         HostSaveString("selected_model_ollama", modelName);
-        HostSaveString("custom_endpoint_ollama", customEndpoint);
     }
 }
 
@@ -594,9 +591,8 @@ void LoadUserConfig() {
     g_config.Load();
     g_logger.Info("apiFormat: " + g_config.apiFormat);
     g_logger.Info("Loaded model: " + g_config.modelName);
-    g_logger.Info("Loaded API Key: " + (g_config.apiKey.empty() ? "(not set)" : "(set)"));
     if (!g_config.customEndpoint.empty()) {
-        g_logger.Info("Loaded custom endpoint: " + g_config.customEndpoint);
+        g_logger.Info("Custom endpoint (from file): " + g_config.customEndpoint);
     }
 }
 
@@ -787,7 +783,6 @@ string ServerLogin(string User, string Pass) {
 
 void ServerLogout() {
     g_config.Save();
-    HostSaveString("api_key_ollama", "");
     g_logger.Info("Successfully logged out from Ollama translation plugin");
 }
 
