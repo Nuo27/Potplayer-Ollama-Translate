@@ -542,6 +542,7 @@ string ExtractAnthropicText(const string &in body) {
 Config g_config;
 ProviderInfo g_provider;
 bool g_isPluginActive = true;
+bool g_langErrorShown = false;
 
 // ========================
 // request assembly & send
@@ -811,8 +812,12 @@ string Translate(string Text, string &in SrcLang, string &in DstLang) {
     if (!g_isPluginActive) return "Plugin is not loaded normally, please check settings";
 
     if (!IsTargetLanguageValid(DstLang)) {
-        g_logger.Warn("Target language not specified");
-        ShowError("Target language not specified", "Translation Failed");
+        // one MessageBox per session; Translate is a per-subtitle hot path
+        if (!g_langErrorShown) {
+            g_langErrorShown = true;
+            ShowError("Target language not specified", "Translation Failed");
+        }
+        g_logger.Warn("Target language not specified; returning subtitle untranslated");
         return "";
     }
 
