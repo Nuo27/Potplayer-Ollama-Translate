@@ -15,11 +15,11 @@ Ollama测试版本：0.32.1
 - 支持多种 API 协议：Ollama 原生、LM Studio REST、OpenAI 兼容、Anthropic 兼容，详见[高级配置和 Debug](#高级配置和-debug)。
 - 支持 Ollama Cloud、云端 OpenAI / Anthropic 兼容 API。
 - 可自定义系统提示词、用户提示词和上下文提示词，提供 [提示词合集](prompts.md)。
-- 可配置模型参数（`temperature`、`topP`、`contextLength`、`maxTokens`），详见[模型配置](#模型配置)。
+- 可配置模型参数（`temperature`、`topP`、`contextLength`、`maxTokens`、`requestTimeoutMs`），详见[模型配置](#模型配置)。
 - 支持上文历史（最近 N 条字幕），翻译更自然，详见[上文历史](#上文历史)。
-- 支持翻译缓存（内存 + 可选磁盘），重复字幕不再重复请求。
+- 支持翻译缓存（内存 LRU），重复字幕不再重复请求。
 - 可控制推理模型的思考模式，包括 qwen3、deepseek-r1、gpt-oss，详见[推理配置](#推理配置)。
-- 网络异常时自动重试，错误日志包含诊断信息。
+- 网络级错误自动重试一次（确定性 API 错误不重试），错误日志包含诊断信息。
 
 ## 目录
 
@@ -29,6 +29,7 @@ Ollama测试版本：0.32.1
   - [安装插件](#安装插件)
   - [注意事项](#注意事项)
   - [更新](#更新)
+    - [V3.1 主要更新](#v31-主要更新)
     - [V3.0 主要更新](#v30-主要更新)
   - [关于项目](#关于项目)
   - [自定义配置](#自定义配置)
@@ -73,6 +74,7 @@ Ollama测试版本：0.32.1
 
 ## 注意事项
 
+- 插件依赖 PotPlayer 的 AngelScript 扩展 API（`HttpClient`、`JsonReader`/`JsonValue`、`HostIncTimeOut`、`HostGetTickCount` 等）。这些 API 自扩展系统早期版本即存在，但建议使用较新的 PotPlayer 正式版；过旧的版本可能无法加载脚本。
 - Ollama 本地用户请**请确保将模型和 ollama 更新到 >= 0.9.0 版本**
 - 请确保使用**支持多语言任务**的模型。
 - 根据翻译质量自行调整所用的提示词。
@@ -80,6 +82,15 @@ Ollama测试版本：0.32.1
 - 非常推荐使用**Instruct** 模型，如`qwen3.5:27b`，推荐模型可以参考[性能表现](#性能表现)部分。
 
 ## 更新
+
+### V3.1 主要更新
+
+- 请求超时可配置（`requestTimeoutMs`），单次调用的超时预算覆盖一次请求加至多一次网络级重试，缓解 PotPlayer 内部超时中断问题。
+- 本地 Ollama 请求新增 `keep_alive` 与 `num_predict`，登录成功后自动预热模型，显著降低首句和暂停后的翻译延迟。
+- 重试收敛为仅网络级错误；确定性 API 错误（4xx/5xx）不再重复请求。
+- 修复 LM Studio REST 思考强度参数生成非法 JSON 的问题。
+- 修复 Anthropic 思考模式 `budget_tokens` 非法及温度限制。
+- 修复繁体中文登录界面标签；翻译缓存改为真正的 LRU；JSON 转义覆盖全部控制字符。
 
 ### V3.0 主要更新
 
@@ -124,6 +135,7 @@ Ollama测试版本：0.32.1
 | `topP`            | `0.8 - 0.95` | 控制模型选词范围，通常不用修改。                           |
 | `contextLength`   | `4096`       | 上下文窗口大小。越大越占用显存，普通字幕保持 `4096`。      |
 | `maxTokens`       | `512`        | 单次输出长度上限。普通字幕保持 `512`。                     |
+| `requestTimeoutMs` | `60000`     | 单次翻译调用（含至多一次网络级重试）的超时预算（毫秒）。慢模型可调大。 |
 | `cacheMaxEntries` | `500`        | 内存缓存最多保存的翻译数量。                               |
 
 > 这些配置位于 `.as` 文件的 `Config` 类。通常只需要调整 `temperature` 和 `contextEnabled`。不要随意添加不存在的参数。
@@ -143,7 +155,7 @@ Ollama测试版本：0.32.1
 | `contextCount`   | `7`                      | 包含在上文中的最近句子数量 |
 | `contextPrompt`  | [prompts.md](prompts.md) | 自定义上下文提示词模板     |
 
-> 历史记录条目包含原文、译文和语言元数据，格式为：`[源语言] 原文 -> [目标语言] 译文`
+> 历史记录条目格式为：`原文 ⇒ 译文`（不含语言元数据）
 > 如果显著增加条目数量，由于上下文大小增加，响应时间也可能显著增加。还需要相应调整 token 数量。
 > 仅当 `contextEnabled` 启用且 `contextPrompt` 非空时，上下文才会被注入到提示词中。
 

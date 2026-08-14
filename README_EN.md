@@ -15,11 +15,11 @@ Ollama test version: 0.32.1
 - Supports multiple API protocols: Ollama native, LM Studio REST, OpenAI-compatible, Anthropic-compatible. See [Advanced configuration and Debug](#advanced-configuration-and-debug).
 - Supports Ollama Cloud, OpenAI / Anthropic cloud-compatible APIs.
 - Customizable system prompt, user prompt, and context prompt, with a [prompt collection](prompts_EN.md).
-- Adjustable model parameters (`temperature`, `topP`, `contextLength`, `maxTokens`), see [Model configuration](#model-configuration).
+- Adjustable model parameters (`temperature`, `topP`, `contextLength`, `maxTokens`, `requestTimeoutMs`), see [Model configuration](#model-configuration).
 - Supports context history (last N subtitles) for more natural translations, see [Context history](#context-history).
-- Translation cache (memory + optional disk) avoids duplicate requests for repeated subtitles.
+- In-memory LRU translation cache avoids duplicate requests for repeated subtitles.
 - Toggleable thinking mode for reasoning models such as qwen3, deepseek-r1, and gpt-oss, see [Reasoning configuration](#reasoning-configuration).
-- Automatic retry on transient network errors, with diagnostic error logs.
+- Single retry on network-level errors (deterministic API errors are not retried), with diagnostic error logs.
 
 ## Table of Contents
 
@@ -29,6 +29,7 @@ Ollama test version: 0.32.1
   - [Installation](#installation)
   - [Notes](#notes)
   - [Updates](#updates)
+    - [V3.1 main updates](#v31-main-updates)
     - [V3.0 main updates](#v30-main-updates)
   - [About](#about)
   - [Custom configuration](#custom-configuration)
@@ -75,6 +76,7 @@ Ollama test version: 0.32.1
 
 ## Notes
 
+- The plugin depends on PotPlayer's AngelScript extension API (`HttpClient`, `JsonReader`/`JsonValue`, `HostIncTimeOut`, `HostGetTickCount`, etc.). These APIs have existed since the early extension system, but a recent official PotPlayer build is recommended; very old builds may fail to load the script.
 - **Ollama local users**: make sure both Ollama and the model are **>= 0.9.0**.
 - Use a model that **supports multilingual tasks**.
 - Tune the prompt yourself when translation quality is not ideal.
@@ -82,6 +84,15 @@ Ollama test version: 0.32.1
 - **Instruct** models are strongly recommended, e.g. `qwen3.5:27b`. See [Performance](#performance) for tested platforms.
 
 ## Updates
+
+### V3.1 main updates
+
+- Configurable request timeout (`requestTimeoutMs`); one call's budget covers one request plus at most one network-level retry, mitigating PotPlayer's internal timeout interruption.
+- Local Ollama requests now send `keep_alive` and `num_predict`; the model is warmed up right after a successful login, greatly reducing first-line and post-pause latency.
+- Retry narrowed to network-level errors only; deterministic API errors (4xx/5xx) are no longer re-sent.
+- Fixed invalid JSON produced by the LM Studio REST thinking-strength parameter.
+- Fixed Anthropic thinking-mode `budget_tokens` and temperature constraints.
+- Fixed the Traditional Chinese login dialog label; the translation cache is now a true LRU; JSON escaping covers all control characters.
 
 ### V3.0 main updates
 
@@ -126,6 +137,7 @@ Ollama test version: 0.32.1
 | `topP`            | `0.8 - 0.95` | Controls token selection range; usually no need to change.                    |
 | `contextLength`   | `4096`       | Context window size. Larger uses more VRAM; keep `4096` for normal subtitles. |
 | `maxTokens`       | `512`        | Output length cap per request; keep `512` for normal subtitles.               |
+| `requestTimeoutMs` | `60000`     | Timeout budget per translation call (one request plus at most one network retry), in ms. Increase for slow models. |
 | `cacheMaxEntries` | `500`        | Maximum in-memory cached translation entries.                                 |
 
 > These fields live in the `Config` class of the `.as` file. You usually only need to adjust `temperature` and `contextEnabled`. Do not invent fields that do not exist.
@@ -145,7 +157,7 @@ Ollama test version: 0.32.1
 | `contextCount`   | `7`                            | Number of recent subtitle lines used as context.         |
 | `contextPrompt`  | [prompts_EN.md](prompts_EN.md) | Custom context prompt template.                          |
 
-> Each history entry stores source, translation, and language metadata in the form `[source] source -> [target] translation`.
+> Each history entry has the form `source ⇒ translation` (no language metadata).
 > If you increase the number of entries significantly, response time may grow due to a larger context. Adjust token counts accordingly.
 > Context is injected into prompts only when `contextEnabled` is true and `contextPrompt` is non-empty.
 
