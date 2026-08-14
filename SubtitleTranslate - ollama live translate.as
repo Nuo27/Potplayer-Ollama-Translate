@@ -412,7 +412,8 @@ string BuildOllamaRequest(const string &in escapedModel, const string &in sysCon
 string RestReasoningValue() {
     if (!g_config.enableThinking) return "off";
     if (g_config.thinkStrength.empty()) return "on";
-    return "\"" + g_config.thinkStrength + "\"";
+    // caller wraps this in quotes; return the bare value so the JSON stays valid
+    return g_config.thinkStrength;
 }
 
 // lms rest v1: input + system_prompt top-level + flat fields
