@@ -126,9 +126,7 @@ Ollama test version: 0.32.1
 | `topP`            | `0.8 - 0.95` | Controls token selection range; usually no need to change.                    |
 | `contextLength`   | `4096`       | Context window size. Larger uses more VRAM; keep `4096` for normal subtitles. |
 | `maxTokens`       | `512`        | Output length cap per request; keep `512` for normal subtitles.               |
-| `cacheEnabled`    | `false`      | Enable disk cache.                                                            |
-| `cacheMaxEntries` | `500`        | Maximum cached translation entries.                                           |
-| `useHttpClient`   | `false`      | Use an alternative HTTP transport. Try only if status codes are mis-detected. |
+| `cacheMaxEntries` | `500`        | Maximum in-memory cached translation entries.                                 |
 
 > These fields live in the `Config` class of the `.as` file. You usually only need to adjust `temperature` and `contextEnabled`. Do not invent fields that do not exist.
 
@@ -145,7 +143,6 @@ Ollama test version: 0.32.1
 | ---------------- | ------------------------------ | -------------------------------------------------------- |
 | `contextEnabled` | `true`                         | Whether to use previous subtitle history in translation. |
 | `contextCount`   | `7`                            | Number of recent subtitle lines used as context.         |
-| `contextMaxSize` | `20`                           | Maximum number of history entries retained.              |
 | `contextPrompt`  | [prompts_EN.md](prompts_EN.md) | Custom context prompt template.                          |
 
 > Each history entry stores source, translation, and language metadata in the form `[source] source -> [target] translation`.
