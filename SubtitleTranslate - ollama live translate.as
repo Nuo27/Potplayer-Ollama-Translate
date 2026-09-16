@@ -65,7 +65,7 @@ class Config {
     string openaiConfigs = ""
         + "{"
         + "\"temperature\": 0.3, "
-        // + "\"reasoning_effort\": \"none\", "
+        + "\"reasoning_effort\": \"none\", "
         + "\"chat_template_kwargs\": { \"enable_thinking\": false }"
         + "}";
 
@@ -74,7 +74,8 @@ class Config {
     string anthropicConfigs = ""
     + "{"
     + "\"temperature\": 0.3, "
-    + "\"max_tokens\": 512"
+    + "\"max_tokens\": 512, "
+    + "\"thinking\": {\"type\": \"disabled\"}"
     + "}";
 
     // ---- general settings: context history ----
@@ -240,17 +241,24 @@ ProviderInfo DetectProvider() {
         p.authIsBearer = true;
         p.name = g_config.apiKey.empty() ? "Ollama Local" : "Ollama Cloud";
     } else if (p.kind == "openai") {
-        p.chatUrl = "http://127.0.0.1:1234/v1/chat/completions";
-        p.tagsUrl = "http://127.0.0.1:1234/v1/models";
+        if (g_config.apiKey.empty()) {
+            p.chatUrl = OLLAMA_LOCAL_BASE + "/v1/chat/completions";
+            p.tagsUrl = OLLAMA_LOCAL_BASE + "/v1/models";
+        } else {
+            p.chatUrl = "https://api.openai.com/v1/chat/completions";
+            p.tagsUrl = "https://api.openai.com/v1/models";
+        }
         p.needsAuth = !g_config.apiKey.empty();
         p.authIsBearer = true;
-        p.name = "OpenAI-compat";
+        p.name = g_config.apiKey.empty() ? "OpenAI Local" : "OpenAI Cloud";
     } else if (p.kind == "anthropic") {
-        p.chatUrl = "http://127.0.0.1:1234/v1/messages";
-        p.tagsUrl = "";
+        p.chatUrl = g_config.apiKey.empty()
+            ? OLLAMA_LOCAL_BASE + "/v1/messages"
+            : "https://api.anthropic.com/v1/messages";
+        p.tagsUrl = "";   // anthropic has no list-models endpoint; login tests with a minimal request
         p.needsAuth = !g_config.apiKey.empty();
         p.authIsBearer = false;
-        p.name = "Anthropic-compat";
+        p.name = g_config.apiKey.empty() ? "Anthropic Local" : "Anthropic Cloud";
     } else {
         // unknown format: fall back to ollama to avoid lockout
         g_logger.Warn("Unknown apiFormat '" + p.kind + "', defaulting to ollama");

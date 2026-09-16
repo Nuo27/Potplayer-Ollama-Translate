@@ -84,19 +84,22 @@
 
 **默认端点**
 
-| `apiFormat` | 默认端点                                    |
-| ----------- | ------------------------------------------- |
-| `ollama`    | `http://127.0.0.1:11434`                    |
-| `openai`    | `http://127.0.0.1:1234/v1/chat/completions` |
-| `anthropic` | `http://127.0.0.1:1234/v1/messages`         |
+无 API Key 时三种格式统一回退到**本地 Ollama 的对应兼容端点**；填写 API Key 自动切换到官方云端。
 
-> `ollama` 格式：API Key 留空 = 本地（`http://127.0.0.1:11434`）；填写 Key = 自动切换到 Ollama Cloud（`https://ollama.com`）。
+| `apiFormat` | 无 API Key（本地 Ollama）                 | 有 API Key（云端）                             |
+| ----------- | ----------------------------------------- | ---------------------------------------------- |
+| `ollama`    | `http://127.0.0.1:11434`                  | `https://ollama.com`                           |
+| `openai`    | `http://127.0.0.1:11434/v1/chat/completions` | `https://api.openai.com/v1/chat/completions` |
+| `anthropic` | `http://127.0.0.1:11434/v1/messages`      | `https://api.anthropic.com/v1/messages`        |
+
+> `anthropic` 本地回退需要 Ollama 的 Anthropic 兼容层（新版 Ollama 已内置，实测 `/v1/messages` 可用）。
 
 `customEndpoint` 留空使用上述默认；可填服务主机地址（插件按 `apiFormat` 自动补齐 `/api/chat` / `/v1/chat/completions` / `/v1/messages`）或完整 URL。常见场景：
 
 - Ollama Cloud：`apiFormat = "ollama"`，账户设置填 API Key，`customEndpoint` 留空。
-- OpenAI 兼容：`apiFormat = "openai"`，`customEndpoint = "http://localhost:1234"`（LM Studio）、`"https://openrouter.ai/api/v1"`、`"https://api.z.ai/api/paas/v4/chat/completions"`。
-- Anthropic 兼容：`apiFormat = "anthropic"`，账户设置填 API Key（本地服务如 LM Studio 无需 Key）。云端 Anthropic 需设置 `customEndpoint = "https://api.anthropic.com"`，本地 LM Studio 可留空走默认地址。Anthropic 格式没有通用的模型列表端点，登录时插件会发送一次极小测试请求来校验模型与密钥。
+- OpenAI 官方：`apiFormat = "openai"`，账户设置填 API Key，`customEndpoint` 留空；若模型不支持 `reasoning_effort` 参数（如 gpt-4o），从 `openaiConfigs` 中删除该字段。
+- 其他 OpenAI 兼容服务：`apiFormat = "openai"`，`customEndpoint = "http://localhost:1234"`（LM Studio）、`"https://openrouter.ai/api/v1"`、`"https://api.z.ai/api/paas/v4/chat/completions"`。
+- Anthropic 官方：`apiFormat = "anthropic"`，账户设置填 API Key，`customEndpoint` 留空；本地用 Ollama 模型时无需 Key、留空即走本地回退。Anthropic 格式没有通用的模型列表端点，登录时插件会发送一次极小测试请求来校验模型与密钥。
 
 ### 模型配置
 

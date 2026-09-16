@@ -83,19 +83,22 @@ Model name and API key resolution order: **login dialog input > code-side defaul
 
 **Default endpoints**
 
-| `apiFormat` | Default endpoint                            |
-| ----------- | ------------------------------------------- |
-| `ollama`    | `http://127.0.0.1:11434`                    |
-| `openai`    | `http://127.0.0.1:1234/v1/chat/completions` |
-| `anthropic` | `http://127.0.0.1:1234/v1/messages`         |
+Without an API key, all three formats fall back to the matching **local Ollama compatibility endpoint**; filling in an API key switches to the official cloud.
 
-> For `ollama`: an empty API key means local (`http://127.0.0.1:11434`); any non-empty key switches to Ollama Cloud (`https://ollama.com`).
+| `apiFormat` | No API key (local Ollama)               | With API key (cloud)                             |
+| ----------- | --------------------------------------- | ------------------------------------------------ |
+| `ollama`    | `http://127.0.0.1:11434`                | `https://ollama.com`                             |
+| `openai`    | `http://127.0.0.1:11434/v1/chat/completions` | `https://api.openai.com/v1/chat/completions` |
+| `anthropic` | `http://127.0.0.1:11434/v1/messages`    | `https://api.anthropic.com/v1/messages`          |
+
+> The `anthropic` local fallback requires Ollama's Anthropic compatibility layer (built into recent Ollama versions; `/v1/messages` verified working).
 
 Leave `customEndpoint` empty for the default above; you may also set it to a host (the plugin appends `/api/chat` / `/v1/chat/completions` / `/v1/messages` based on `apiFormat`) or a full URL. Common cases:
 
 - Ollama Cloud: `apiFormat = "ollama"`, fill the API key in account settings, leave `customEndpoint` empty.
-- OpenAI compatible: `apiFormat = "openai"`, `customEndpoint = "http://localhost:1234"` (LM Studio), `"https://openrouter.ai/api/v1"`, or `"https://api.z.ai/api/paas/v4/chat/completions"`.
-- Anthropic compatible: `apiFormat = "anthropic"`, fill the API key in account settings (not needed for local services such as LM Studio). For the Anthropic cloud, set `customEndpoint = "https://api.anthropic.com"`; local services such as LM Studio can leave it empty for the default address. The Anthropic format has no portable list-models endpoint; at login the plugin sends one minimal test request to validate the model and key.
+- Official OpenAI: `apiFormat = "openai"`, fill the API key, leave `customEndpoint` empty; if your model rejects the `reasoning_effort` parameter (e.g. gpt-4o), remove that field from `openaiConfigs`.
+- Other OpenAI-compatible services: `apiFormat = "openai"`, `customEndpoint = "http://localhost:1234"` (LM Studio), `"https://openrouter.ai/api/v1"`, or `"https://api.z.ai/api/paas/v4/chat/completions"`.
+- Official Anthropic: `apiFormat = "anthropic"`, fill the API key, leave `customEndpoint` empty; to use local Ollama models, leave the key empty and the local fallback applies. The Anthropic format has no portable list-models endpoint; at login the plugin sends one minimal test request to validate the model and key.
 
 ### Model configuration
 
