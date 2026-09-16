@@ -8,69 +8,65 @@ Ready-to-use prompts for PotPlayer subtitle translation.
 
 1. Open `SubtitleTranslate - ollama live translate.as`.
 2. Copy a prompt into the matching field:
-   - `systemPrompt`: translation role and rules
-   - `userPrompt`: current subtitle text
-   - `contextPrompt`: previous subtitle context
+   - `SYSTEM_PROMPT_BASE`: translation role and rules
+   - `USER_PROMPT_BASE`: current subtitle text (including the context reference block)
 3. Save the file and restart PotPlayer.
 
 ## Template variables
 
-| Variable                         | Meaning                                                         |
-| -------------------------------- | --------------------------------------------------------------- |
-| `{{from}}`                       | Source language. May be empty when automatic detection is used. |
-| `{{to}}`                         | Target language.                                                |
-| `{{text_to_translate}}`          | Current subtitle. Required in `userPrompt`.                     |
-| `{{context_prompt}}`             | Context prompt inserted into `userPrompt`.                      |
-| `{{optional_reference_context}}` | Previous subtitle context.                                      |
+| Variable                | Meaning                                                                                                                                    |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `{{from}}`              | Source language. Expands to `the source language` when empty or `auto`.                                                                    |
+| `{{to}}`                | Target language.                                                                                                                           |
+| `{{text_to_translate}}` | Current subtitle. Required in `userPrompt`.                                                                                                |
+| `{{context_raw}}`       | Raw context history (previous subtitles in `source ⇒ translation` form). Empty string when context is disabled; wrapped in `<context>` tags by the default template. |
 
 ## Default prompts
 
 ### SYSTEM_PROMPT_BASE
 
-v3.0 default system prompt for general subtitle translation.
+Default system prompt for professional single-line subtitle translation: three principles - Faithful, Idiomatic, In character - combined with the `<context>` block below and a trailing anchor instruction, balancing translation quality with output adherence.
 
 ```
 const string SYSTEM_PROMPT_BASE =
-"You are a real-time subtitle translator.\n"
-"Translate the user text from {{from}} to {{to}}.\n"
+"You are a senior subtitle translator. Translate from {{from}} into {{to}}.\n"
 "\n"
-"Rules:\n"
-"- Output only the translation in {{to}}. No explanation.\n"
-"- Preserve names, numbers, code, and identifiers as-is.\n"
-"- Adapt phrasing for native fluency, do not translate word-by-word.\n"
-"- If input is incomplete, translate what is given.\n"
+"Principles:\n"
+"- Faithful: convey exactly what the line says - nothing added, nothing omitted, nothing explained.\n"
+"- Idiomatic: recast each line the way a native speaker would say it, never word-for-word. If it sounds translated, rewrite it.\n"
+"- In character: match the speaker's register - casual, formal, slang, angry, teasing - and keep lines short enough to read at a glance.\n"
+"- Consistent: follow the names, terms, and honorifics already established in context.\n"
 "\n"
-"If context is provided, use it only for tone and reference.\n"
-"Never translate or repeat the context.\n";
+"Output rules:\n"
+"- Emit only the translation - no quotes, no notes, no source text.\n"
+"- Keep names, numbers, units, code, and identifiers unchanged.\n"
+"- A mid-sentence fragment stays a fragment; do not complete it.\n"
+"\n"
+"User messages may include a <context> block of earlier lines, each as \"source ⇒ translation\" (read only).\n"
+"Use it for tone, terminology, and continuity; it may be empty. Never translate or repeat the context.\n";
 ```
 
 ### USER_PROMPT_BASE
 
 ```
 const string USER_PROMPT_BASE =
-"{{context_prompt}}"
-"Translate the following text in <text> to {{to}}:\n"
+"<context>\n"
+"{{context_raw}}\n"
+"</context>\n"
 "\n"
 "<text>\n"
 "{{text_to_translate}}\n"
-"</text>\n";
+"</text>\n"
+"\n"
+"Translate the line in <text> into {{to}}. Output only the translation.\n";
 ```
 
-### CONTEXT_PROMPT_BASE
+### SYSTEM_PROMPT_INTERPRETER
+
+Simultaneous-interpreter style system prompt with finer-grained rules, suited to narrative and dialogue-heavy content.
 
 ```
-const string CONTEXT_PROMPT_BASE =
-"Reference context (do NOT translate):\n"
-"{{optional_reference_context}}\n"
-"\n";
-```
-
-### SYSTEM_PROMPT_BASE (legacy)
-
-Earlier default system prompt, kept as a reference.
-
-```
-const string SYSTEM_PROMPT_BASE =
+const string SYSTEM_PROMPT_INTERPRETER =
 "You are a professional simultaneous interpreter.\n"
 "Translate from {{from}} into {{to}} with natural, fluent, native-sounding output.\n"
 "Preserve meaning, tone, emotion, and speaker intent.\n"
@@ -150,38 +146,6 @@ const string SYSTEM_PROMPT_LONG =
     "Follow all rules strictly and execute tasks exactly as defined.\n";
 ```
 
-## Deprecated prompts
-
-These earlier prompts are kept for reference only.
-
-### SYSTEM_PROMPT_OLD
-
-```
-You are a professional subtitle translator. Your task is to fluently translate text into the target language. Strictly follow these rules:
-
-1. Output only the translated content, without explanations or additional content.
-2. Use provided context if provided to aid understanding, but DO NOT include it in your output.
-3. Maintain the original tone, style, and narrative of the subtitles.
-```
-
-### SYSTEM_PROMPT_BASIC
-
-```
-Act as a professional, authentic translation engine dedicated to providing accurate and fluent translations of subtitles.
-ONLY provide the translated subtitle text without any additional information.
-```
-
-### SYSTEM_PROMPT_BASIC_OLD_TWO_STEP
-
-```
-You are a professional subtitle translator skilled in accurate and culturally appropriate translations. I may provide additional context to help clarify the meaning. Use this context to understand the subtitle's meaning and provide an accurate translation. Follow these rules:
-
-1. First, perform a direct translation based on the original text without adding any information.
-2. Then, reinterpret the translation to make it sound more natural and understandable in the target language, while preserving the original meaning.
-3. Use the provided context and cultural cues to ensure the translation aligns with local language norms and nuances.
-4. Your output must only include the translated text—do not include any explanations, context, or commentary.
-```
-
 ## Common styles
 
 ### Natural spoken subtitles
@@ -236,17 +200,19 @@ const string SYSTEM_PROMPT_TONE =
 "Do not add explanations. Output only the translation.\n";
 ```
 
-## Context prompt
+## Custom context block
 
-Use context to understand names, terminology, tone, and continuity. Do not translate the context.
+The default `userPrompt` already wraps `{{context_raw}}` in `<context>` tags, and the system prompt declares that this block "may be empty", so nothing extra is needed when context history is disabled. To change the wrapper, edit your own `userPrompt` and wrap `{{context_raw}}` in your own tags or wording (note: `{{context_raw}}` expands to an empty string when there is no context, so a custom wrapper must tolerate empty content):
 
 ```
-const string CONTEXT_PROMPT_CONTINUITY =
-"The following previous subtitles are reference only.\n"
-"Use them for names, terminology, tone, and continuity.\n"
-"Do not translate, repeat, or summarize them.\n"
-"\n"
+const string USER_PROMPT_BASE =
 "<context>\n"
-"{{optional_reference_context}}\n"
-"</context>\n";
+"{{context_raw}}\n"
+"</context>\n"
+"\n"
+"Translate the following text in <text> to {{to}}:\n"
+"\n"
+"<text>\n"
+"{{text_to_translate}}\n"
+"</text>\n";
 ```
